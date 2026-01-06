@@ -1,0 +1,66 @@
+[package]
+name = "a2rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["A2RS Project"]
+description = "A2RS - Apple II Emulator written in Rust"
+license = "MIT"
+repository = "https://github.com/user/a2rs"
+keywords = ["apple2", "emulator", "6502", "retro"]
+categories = ["emulators", "games"]
+
+[lib]
+name = "a2rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "a2rs"
+path = "src/main.rs"
+
+[[bin]]
+name = "cpu_test"
+path = "src/bin/cpu_test.rs"
+
+[dependencies]
+# For serialization/deserialization of state
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# For logging
+log = "0.4"
+env_logger = "0.11"
+
+# For command line argument parsing
+clap = { version = "4.0", features = ["derive"] }
+
+# For random number generation
+rand = "0.8"
+
+# Cross-platform graphics
+minifb = "0.27"
+
+# Image processing for screenshots
+png = "0.17"
+
+# Date/time for profiler
+chrono = "0.4"
+
+# Audio output (optional - requires system audio libraries)
+# Ubuntu/Debian: sudo apt-get install libasound2-dev
+# Fedora: sudo dnf install alsa-lib-devel
+# macOS/Windows: no additional packages needed
+rodio = { version = "0.17", optional = true }
+
+# Gamepad support (optional)
+# Ubuntu/Debian: sudo apt-get install libudev-dev
+gilrs = { version = "0.10", optional = true }
+
+[features]
+default = []
+audio = ["rodio"]
+gamepad = ["gilrs"]
+full = ["audio", "gamepad"]
+
+[profile.release]
+opt-level = 3
+lto = true

@@ -1,0 +1,17 @@
+{
+  "last_disk1": null,
+  "last_disk2": null,
+  "last_rom": null,
+  "speed": 1,
+  "fast_disk": true,
+  "sound_enabled": true,
+  "quality_level": 4,
+  "auto_quality": true,
+  "window_width": 560,
+  "window_height": 384,
+  "current_slot": 0,
+  "rom_dir": "roms",
+  "disk_dir": "disks",
+  "screenshot_dir": "screenshots",
+  "save_dir": "saves"
+}
