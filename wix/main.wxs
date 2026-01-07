@@ -1,0 +1,227 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  Copyright (C) 2017 Christopher R. Field.
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+
+<!--
+  The "cargo wix" subcommand provides a variety of predefined variables available
+  for customization of this template. The values for each variable are set at
+  installer creation time. The following variables are available:
+
+  TargetTriple      = The rustc target triple name.
+  TargetEnv         = The rustc target environment. This is typically either
+                      "msvc" or "gnu" depending on the toolchain downloaded and
+                      installed.
+  TargetVendor      = The rustc target vendor. This is typically "pc", but Rust
+                      does support other vendors, like "uwp".
+  CargoTargetBinDir = The complete path to the directory containing the
+                      temporary binaries generated during the build process.
+  CargoTargetDir    = The complete path to the directory for the build
+                      artifacts, i.e. `auto` or `release`.
+  CargoProfile      = Either "debug" or `release` depending on the build
+                      profile. The default is `release`.
+  Version           = The version for the installer. The default is the
+                      temporary "0.0.0" placeholder value, which should be
+                      replaced with the version of the application using
+                      the `-v` or `--version` flag.
+-->
+
+<!--
+  Please do not remove these pre-processor If-Else blocks. These are used with
+  the `cargo wix` subcommand to automatically determine the installation
+  temporary and correct bitness for the installer. 64-bit installers
+  temporary have the ProgramFiles64Folder, while 32-bit installers have the
+  ProgramFilesFolder path.
+-->
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+
+    <Product
+        Id='*'
+        Name='A2RS Apple II Emulator'
+        UpgradeCode='E8F2C4A1-9B3D-4E5F-A6C7-8D9E0F1A2B3C'
+        Manufacturer='A2RS Project'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='A2RS - Apple II Emulator written in Rust'
+            Manufacturer='A2RS Project'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'
+            />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='A2RS Installation'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='A2RS'>
+                    
+                    <!-- Main executable -->
+                    <Component Id='Path' Guid='A1B2C3D4-E5F6-7890-1234-567890ABCDEF' Win64='$(var.Win64)'>
+                        <File
+                            Id='exe0'
+                            Name='a2rs.exe'
+                            DiskId='1'
+                            Source='$(var.CargoTargetBinDir)\a2rs.exe'
+                            KeyPath='yes'/>
+                        
+                        <!-- Add to PATH (optional) -->
+                        <Environment
+                            Id='PATH'
+                            Name='PATH'
+                            Value='[APPLICATIONFOLDER]'
+                            Permanent='no'
+                            Part='last'
+                            Action='set'
+                            System='yes'/>
+                    </Component>
+                    
+                    <!-- Default config file -->
+                    <Component Id='ConfigFile' Guid='B2C3D4E5-F678-9012-3456-7890ABCDEF01' Win64='$(var.Win64)'>
+                        <File
+                            Id='config0'
+                            Name='apple2_config.json'
+                            DiskId='1'
+                            Source='wix\apple2_config.json'
+                            KeyPath='yes'/>
+                    </Component>
+                    
+                    <!-- Subdirectories -->
+                    <Directory Id='RomsDir' Name='roms'>
+                        <Component Id='RomsDirComp' Guid='C3D4E5F6-7890-1234-5678-90ABCDEF0123' Win64='$(var.Win64)'>
+                            <CreateFolder/>
+                        </Component>
+                    </Directory>
+                    
+                    <Directory Id='DisksDir' Name='disks'>
+                        <Component Id='DisksDirComp' Guid='D4E5F678-9012-3456-7890-ABCDEF012345' Win64='$(var.Win64)'>
+                            <CreateFolder/>
+                        </Component>
+                    </Directory>
+                    
+                    <Directory Id='SavesDir' Name='saves'>
+                        <Component Id='SavesDirComp' Guid='E5F67890-1234-5678-90AB-CDEF01234567' Win64='$(var.Win64)'>
+                            <CreateFolder/>
+                        </Component>
+                    </Directory>
+                    
+                    <Directory Id='ScreenshotsDir' Name='screenshots'>
+                        <Component Id='ScreenshotsDirComp' Guid='F6789012-3456-7890-ABCD-EF0123456789' Win64='$(var.Win64)'>
+                            <CreateFolder/>
+                        </Component>
+                    </Directory>
+                    
+                </Directory>
+            </Directory>
+            
+            <!-- Start Menu shortcuts -->
+            <Directory Id='ProgramMenuFolder' Name='Programs'>
+                <Directory Id='ApplicationProgramsFolder' Name='A2RS'>
+                    <Component Id='ApplicationShortcut' Guid='01234567-89AB-CDEF-0123-456789ABCDEF' Win64='$(var.Win64)'>
+                        <Shortcut Id='ApplicationStartMenuShortcut'
+                            Name='A2RS Apple II Emulator'
+                            Description='Apple II Emulator written in Rust'
+                            Target='[APPLICATIONFOLDER]a2rs.exe'
+                            WorkingDirectory='APPLICATIONFOLDER'/>
+                        <RemoveFolder Id='CleanUpShortCut' Directory='ApplicationProgramsFolder' On='uninstall'/>
+                        <RegistryValue Root='HKCU' Key='Software\A2RS' Name='installed' Type='integer' Value='1' KeyPath='yes'/>
+                    </Component>
+                </Directory>
+            </Directory>
+            
+            <!-- Desktop shortcut -->
+            <Directory Id='DesktopFolder' Name='Desktop'>
+                <Component Id='DesktopShortcut' Guid='12345678-9ABC-DEF0-1234-56789ABCDEF0' Win64='$(var.Win64)'>
+                    <Shortcut Id='ApplicationDesktopShortcut'
+                        Name='A2RS Apple II Emulator'
+                        Description='Apple II Emulator written in Rust'
+                        Target='[APPLICATIONFOLDER]a2rs.exe'
+                        WorkingDirectory='APPLICATIONFOLDER'/>
+                    <RegistryValue Root='HKCU' Key='Software\A2RS' Name='desktopShortcut' Type='integer' Value='1' KeyPath='yes'/>
+                </Component>
+            </Directory>
+        </Directory>
+
+        <Feature
+            Id='Binaries'
+            Title='Application'
+            Description='Installs A2RS Apple II Emulator executable and default configuration.'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+            
+            <ComponentRef Id='Path'/>
+            <ComponentRef Id='ConfigFile'/>
+            <ComponentRef Id='RomsDirComp'/>
+            <ComponentRef Id='DisksDirComp'/>
+            <ComponentRef Id='SavesDirComp'/>
+            <ComponentRef Id='ScreenshotsDirComp'/>
+            
+            <Feature
+                Id='StartMenuShortcut'
+                Title='Start Menu Shortcut'
+                Description='Add a shortcut to the Start Menu.'
+                Level='1'
+                Absent='allow'>
+                <ComponentRef Id='ApplicationShortcut'/>
+            </Feature>
+            
+            <Feature
+                Id='DesktopShortcut'
+                Title='Desktop Shortcut'
+                Description='Add a shortcut to the Desktop.'
+                Level='1'
+                Absent='allow'>
+                <ComponentRef Id='DesktopShortcut'/>
+            </Feature>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+
+        <!-- Icon for Add/Remove Programs (optional - uncomment if you have a2rs.ico) -->
+        <!-- <Icon Id='ProductICO' SourceFile='wix\a2rs.ico'/> -->
+        <!-- <Property Id='ARPPRODUCTICON' Value='ProductICO' /> -->
+        
+        <Property Id='ARPHELPLINK' Value='https://github.com/user/a2rs'/>
+        
+        <UI>
+            <UIRef Id='WixUI_FeatureTree'/>
+            
+            <!-- Skip license dialog -->
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='CustomizeDlg' Order='99'>1</Publish>
+            <Publish Dialog='CustomizeDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='99'>1</Publish>
+        </UI>
+        
+    </Product>
+
+</Wix>

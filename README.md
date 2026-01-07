@@ -2,7 +2,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/user/a2rs/ci.yml?branch=main)](https://github.com/user/a2rs/actions)
+[![Version](https://img.shields.io/badge/version-0.2.0-green.svg)](https://github.com/user/a2rs/releases)
 
 [English](#features) | [日本語](#日本語)
 
@@ -19,13 +19,14 @@
 | 🖥️ **Multi-Model Support** | Apple II, II+, IIe, IIe Enhanced |
 | ⚡ **High Performance** | 200+ MHz equivalent speed (release build) |
 | 🎯 **Cycle Accurate** | Passes Klaus2m5 6502 functional test suite |
-| 💾 **Disk II Emulation** | DSK/DO/PO/NIB formats with SafeFast acceleration |
+| 💾 **Disk II Emulation** | DSK/DO/PO/NIB formats with fast disk acceleration |
 | 🎨 **Accurate Video** | Text, Lo-Res, Hi-Res, Double Hi-Res modes |
 | 🎮 **Gamepad Support** | Joystick/gamepad input for paddle emulation |
-| 🔊 **Audio Emulation** | Speaker click emulation |
+| 🔊 **Audio Emulation** | Speaker click emulation with volume control |
 | 📊 **Built-in Profiler** | Performance analysis and boot timing |
 | 🐛 **Debugger UI** | Real-time CPU/memory/disk monitoring |
 | 💾 **Save States** | Quick save/load with 10 slots |
+| 🔧 **Flexible Configuration** | Customizable paths and settings |
 
 ## 🚀 Quick Start
 
@@ -52,6 +53,9 @@ cargo build --release
 ```bash
 # Required
 sudo apt-get install libxkbcommon-dev libwayland-dev
+
+# Required for clipboard support
+sudo apt-get install libxcb-xfixes0-dev
 
 # Optional: audio support
 sudo apt-get install libasound2-dev
@@ -111,6 +115,12 @@ a2rs -m iie -r roms/apple2e.rom -1 disks/prodos.dsk
 
 # Two disk drives
 a2rs -r roms/apple2e.rom -1 disk1.dsk -2 disk2.dsk
+
+# Use custom configuration file
+a2rs --config /path/to/config.json -1 game.dsk
+
+# Use custom home directory for all paths
+a2rs --home D:/Games/Apple2 -1 dos33.dsk
 ```
 
 ### Command Line Options
@@ -123,9 +133,9 @@ OPTIONS:
     -m, --model <MODEL>      Model: auto, ii, ii+, iie, iie-enhanced [default: auto]
         --disk-rom <FILE>    Disk II Boot ROM (256 bytes)
         --speed <N>          Speed multiplier (1=normal, 0=max) [default: 1]
-        --fast-disk          Enable fast disk mode
         --size <WxH>         Window size [default: 640x480]
-        --fullscreen         Start in fullscreen mode
+    -c, --config <FILE>      Configuration file path
+        --home <PATH>        A2RS home directory (base for relative paths)
         --headless           Run without GUI
         --cycles <N>         Cycles to run in headless mode
         --profile            Enable profiler
@@ -140,27 +150,47 @@ OPTIONS:
 
 | Key | Function |
 |:---:|----------|
-| `ESC` | Settings overlay |
-| `Tab` | Toggle debugger panel |
-| `F1` | Cycle speed (×1 → ×2 → ×5 → ×10 → MAX) |
-| `F2` | Toggle fast disk |
+| `F1` | Settings menu |
+| `F2` | Cycle speed (×1 → ×2 → ×5 → ×10 → MAX) |
 | `F3` | Cycle quality level |
 | `F4` | Toggle auto quality |
 | `F5` | Quick save |
+| `F6` | Toggle sound ON/OFF |
+| `F8` | Cycle save slot (0-9) |
 | `F9` | Quick load |
 | `F10` | Screenshot |
-| `F11` | Toggle fullscreen |
+| `F11` | Toggle debugger panel |
 | `F12` | Reset |
+| `ESC` | Close menu (when open) |
+| `Ctrl+0-9` | Select save slot directly |
 
-### Debugger Controls
+### Debugger Controls (when debugger is visible)
 
 | Key | Function |
 |:---:|----------|
+| `Tab` | Switch debugger tabs |
 | `F6` | Step instruction |
-| `F7` | Continue |
+| `F7` | Continue execution |
 | `F8` | Break/Pause |
-| `←` `→` | Switch debugger tabs |
 | `↑` `↓` | Scroll memory view |
+| `PageUp/Down` | Fast scroll memory view |
+
+### Toolbar Buttons
+
+The toolbar provides mouse-clickable buttons:
+
+| Button | Function |
+|:------:|----------|
+| ▶/⏸ | Play/Pause |
+| ⟳ | Reset |
+| 💾1 | Drive 1 disk menu |
+| 💾2 | Drive 2 disk menu |
+| ⇄ | Swap disks |
+| 💾 | Save state |
+| 📂 | Load state |
+| 📷 | Screenshot |
+
+Volume slider is available on the right side of the toolbar.
 
 ## 🎮 Supported Models
 
@@ -179,6 +209,60 @@ OPTIONS:
 | DO | `.do` | 140KB | DOS-ordered disk image |
 | PO | `.po` | 140KB | ProDOS-ordered disk image |
 | NIB | `.nib` | 232KB | Nibblized disk image (raw) |
+
+## 📁 Directory Structure
+
+A2RS uses a flexible directory structure. By default, all paths are relative to the executable directory:
+
+```
+a2rs/
+├── a2rs.exe              # Executable
+├── apple2_config.json    # Configuration file
+├── roms/                 # ROM files
+│   ├── apple2e.rom
+│   └── disk2.rom
+├── disks/                # Disk images
+│   ├── dos33.dsk
+│   └── games/
+├── saves/                # Save states
+└── screenshots/          # Screenshots
+```
+
+### Configuration File (apple2_config.json)
+
+```json
+{
+  "a2rs_home": "",
+  "rom_dir": "roms",
+  "disk_dir": "disks",
+  "screenshot_dir": "screenshots",
+  "save_dir": "saves",
+  "speed": 1,
+  "sound_enabled": true,
+  "volume": 0.5,
+  "quality_level": 4,
+  "auto_quality": true
+}
+```
+
+- `a2rs_home`: Base directory for all relative paths (empty = exe directory)
+- All directory paths are relative to `a2rs_home`
+
+### Custom Home Directory
+
+You can specify a custom home directory:
+
+```bash
+# Via command line
+a2rs --home D:/Games/Apple2 -1 dos33.dsk
+
+# Via config file
+{
+  "a2rs_home": "D:/Games/Apple2",
+  "disk_dir": "disks"
+}
+# Result: disks are loaded from D:/Games/Apple2/disks/
+```
 
 ## 📁 ROM Files
 
@@ -214,6 +298,8 @@ a2rs/
 │   ├── profiler.rs      # Performance profiler
 │   ├── config.rs        # Configuration management
 │   └── savestate.rs     # Save state serialization
+├── wix/                 # Windows installer files
+├── scripts/             # Build scripts
 ├── Cargo.toml
 └── README.md
 ```
@@ -244,6 +330,31 @@ a2rs --profile --profile-boot -1 dos33.dsk
 a2rs --profile --profile-output profile.csv -1 dos33.dsk
 ```
 
+## 📦 Building Installers
+
+### Windows MSI Installer
+
+```bash
+# Install WiX Toolset and cargo-wix
+cargo install cargo-wix
+
+# Build installer
+cargo wix
+# Output: target/wix/a2rs-0.2.0-x86_64.msi
+```
+
+See `wix/README.md` for details.
+
+### Linux DEB Package
+
+```bash
+# Install cargo-deb
+cargo install cargo-deb
+
+# Build package
+cargo deb
+```
+
 ## 🛠️ Development
 
 ```bash
@@ -256,6 +367,47 @@ cargo run -- --disk-log flow+state -1 dos33.dsk
 # Run with boot boost logging
 cargo run -- --boost-log -1 dos33.dsk
 ```
+
+## 📝 Changelog
+
+### Version 0.2.0
+
+- **New Features**
+  - Volume slider in toolbar
+  - Configurable home directory (`--home` option)
+  - Custom config file path (`--config` option)
+  - Clipboard paste support (Ctrl+V) in text input fields
+  - Disk menu shows 60 characters filename, sorted alphabetically
+  
+- **Changes**
+  - Fast disk mode is now always enabled
+  - Settings menu moved to F1 (was ESC)
+  - Debugger panel moved to F11 (was Tab)
+  - Debugger tab switching now uses Tab key
+  - ESC key now passes through to Apple II when no menu is open
+  - Removed fullscreen toggle (F11 now opens debugger)
+
+- **Key Mapping (v0.2.0)**
+  - F1: Settings menu
+  - F2: Speed control
+  - F3: Quality level
+  - F4: Auto quality
+  - F5: Save state
+  - F6: Sound toggle / Step (debugger)
+  - F7: Continue (debugger)
+  - F8: Slot select / Break (debugger)
+  - F9: Load state
+  - F10: Screenshot
+  - F11: Debugger panel
+  - F12: Reset
+
+### Version 0.1.0
+
+- Initial release
+- Apple II/II+/IIe/IIe Enhanced support
+- Disk II emulation
+- Save states
+- Gamepad support
 
 ## 🤝 Contributing
 
@@ -276,7 +428,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Beneath Apple DOS](https://archive.org/details/Beneath_Apple_DOS) — Essential Disk II documentation
 - [Understanding the Apple II](https://archive.org/details/understanding_the_apple_ii) — Hardware reference
 - [Klaus2m5 6502 Test Suite](https://github.com/Klaus2m5/6502_65C02_functional_tests) — CPU validation
-- [AppleWin](https://github.com/AppleWin/AppleWin) — Reference for SafeFast disk acceleration
+- [AppleWin](https://github.com/AppleWin/AppleWin) — Reference implementation
 - [MAME](https://github.com/mamedev/mame) — Apple II driver reference
 
 ---
@@ -292,13 +444,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - 🖥️ **複数モデル対応** — Apple II, II+, IIe, IIe Enhanced
 - ⚡ **高性能** — リリースビルドで200MHz以上の等価速度
 - 🎯 **サイクル精度** — Klaus2m5 6502機能テストに合格
-- 💾 **Disk IIエミュレーション** — DSK/DO/PO/NIB形式、SafeFast高速化対応
+- 💾 **Disk IIエミュレーション** — DSK/DO/PO/NIB形式、高速ディスク対応
 - 🎨 **正確なビデオ出力** — テキスト、Lo-Res、Hi-Res、Double Hi-Resモード
 - 🎮 **ゲームパッド対応** — パドルエミュレーション用ジョイスティック入力
-- 🔊 **オーディオエミュレーション** — スピーカークリック音
+- 🔊 **オーディオエミュレーション** — スピーカークリック音、音量調整
 - 📊 **内蔵プロファイラ** — パフォーマンス分析とブート時間測定
 - 🐛 **デバッガUI** — リアルタイムCPU/メモリ/ディスク監視
 - 💾 **セーブステート** — 10スロットのクイックセーブ/ロード
+- 🔧 **柔軟な設定** — カスタマイズ可能なパスと設定
 
 ### クイックスタート
 
@@ -310,6 +463,9 @@ cargo build --release
 
 # ディスクイメージで起動
 ./target/release/a2rs -r roms/apple2e.rom -1 disks/dos33.dsk
+
+# カスタムホームディレクトリを使用
+./target/release/a2rs --home D:/Games/Apple2 -1 dos33.dsk
 ```
 
 ### 必要なROMファイル
@@ -324,25 +480,46 @@ cargo build --release
 
 | キー | 機能 |
 |:---:|------|
-| `ESC` | 設定オーバーレイ |
-| `Tab` | デバッガパネル切り替え |
-| `F1` | 速度切り替え（×1 → ×2 → ×5 → ×10 → MAX）|
-| `F2` | 高速ディスク切り替え |
+| `F1` | 設定メニュー |
+| `F2` | 速度切り替え（×1 → ×2 → ×5 → ×10 → MAX）|
+| `F3` | 品質レベル切り替え |
+| `F4` | 自動品質切り替え |
 | `F5` | クイックセーブ |
+| `F6` | サウンドON/OFF |
+| `F8` | セーブスロット選択 (0-9) |
 | `F9` | クイックロード |
 | `F10` | スクリーンショット |
-| `F11` | フルスクリーン切り替え |
+| `F11` | デバッガパネル |
 | `F12` | リセット |
+| `ESC` | メニューを閉じる |
+| `Ctrl+0-9` | スロット直接選択 |
 
-### 開発
+### デバッガ操作（デバッガ表示中）
 
-```bash
-# デバッグログ付きで実行
-RUST_LOG=debug cargo run -- -r roms/apple2e.rom -1 dos33.dsk
+| キー | 機能 |
+|:---:|------|
+| `Tab` | タブ切り替え |
+| `F6` | ステップ実行 |
+| `F7` | 継続 |
+| `F8` | ブレーク |
+| `↑` `↓` | メモリビュースクロール |
 
-# ディスクログ付きで実行
-cargo run -- --disk-log flow+state -1 dos33.dsk
-```
+### バージョン 0.2.0 の変更点
+
+- **新機能**
+  - ツールバーに音量スライダー追加
+  - ホームディレクトリ指定オプション（`--home`）
+  - 設定ファイルパス指定オプション（`--config`）
+  - テキスト入力でのクリップボード貼り付け（Ctrl+V）
+  - ディスクメニューで60文字表示、ファイル名ソート
+
+- **変更**
+  - 高速ディスクモードは常にON
+  - 設定メニューをF1に変更（旧ESC）
+  - デバッガパネルをF11に変更（旧Tab）
+  - デバッガのタブ切り替えをTabキーに変更
+  - ESCキーはメニューが開いていない時はApple IIに送信
+  - 全画面モード削除
 
 ---
 

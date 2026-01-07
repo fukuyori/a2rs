@@ -70,6 +70,14 @@ pub struct Speaker {
     silent_frames: u32,
     /// フェードアウト中のゲイン
     fade_gain: f32,
+    /// リセット音の残りサンプル数
+    reset_sound_remaining: usize,
+    /// リセット音の位相
+    reset_sound_phase: f32,
+    /// UIクリック音の残りサンプル数
+    ui_click_remaining: usize,
+    /// UIクリック音の位相
+    ui_click_phase: f32,
 }
 
 impl Speaker {
@@ -85,7 +93,25 @@ impl Speaker {
             last_processed_cycle: 0,
             silent_frames: 100,
             fade_gain: 0.0,
+            reset_sound_remaining: 0,
+            reset_sound_phase: 0.0,
+            ui_click_remaining: 0,
+            ui_click_phase: 0.0,
         }
+    }
+
+    /// リセット音をトリガー（短いビープ音）
+    pub fn trigger_reset_sound(&mut self) {
+        // 約0.1秒間のリセット音
+        self.reset_sound_remaining = (SAMPLE_RATE as usize) / 10;
+        self.reset_sound_phase = 0.0;
+    }
+
+    /// UIクリック音をトリガー（短いクリック音）
+    pub fn trigger_ui_click(&mut self) {
+        // 約0.03秒間の短いクリック音
+        self.ui_click_remaining = (SAMPLE_RATE as usize) / 33;
+        self.ui_click_phase = 0.0;
     }
 
     /// スピーカーをクリック（$C030アクセス時に呼ばれる）
@@ -111,15 +137,20 @@ impl Speaker {
     /// オーディオサンプルを生成
     pub fn generate_samples(&mut self, base_cycle: u64, cycles_per_frame: u64) -> Option<&[f32]> {
         if !self.enabled || cycles_per_frame == 0 {
-            return None;
+            // リセット音またはUIクリック音が残っている場合は処理を続ける
+            if self.reset_sound_remaining == 0 && self.ui_click_remaining == 0 {
+                return None;
+            }
         }
 
         let end_cycle = base_cycle + cycles_per_frame;
         
         // このフレームでクリックがあるか確認
         let has_clicks = self.click_queue.iter().any(|&c| c < end_cycle);
+        let has_reset_sound = self.reset_sound_remaining > 0;
+        let has_ui_click = self.ui_click_remaining > 0;
         
-        if !has_clicks {
+        if !has_clicks && !has_reset_sound && !has_ui_click {
             self.silent_frames = self.silent_frames.saturating_add(1);
             
             // 音がフェードアウト中でない、または完全にフェードアウトした場合
@@ -138,10 +169,16 @@ impl Speaker {
         }
         
         // クリックがある場合はフェードインして処理
-        self.silent_frames = 0;
-        self.fade_gain = 1.0;
+        if has_clicks {
+            self.silent_frames = 0;
+            self.fade_gain = 1.0;
+        }
         
-        let cycles_per_sample = cycles_per_frame as f32 / SAMPLES_PER_FRAME as f32;
+        let cycles_per_sample = if cycles_per_frame > 0 {
+            cycles_per_frame as f32 / SAMPLES_PER_FRAME as f32
+        } else {
+            17030.0 / SAMPLES_PER_FRAME as f32  // デフォルト値
+        };
         
         // 各サンプルを生成
         for i in 0..SAMPLES_PER_FRAME {
@@ -170,8 +207,61 @@ impl Speaker {
             // ソフトサチュレーション
             let saturated = soft_saturate(filtered);
             
-            // 音量適用
-            self.sample_buffer[i] = saturated * self.volume;
+            // 通常の音量適用
+            let mut sample = saturated * self.volume;
+            
+            // リセット音をミックス（800Hz + 1200Hzのビープ音、エンベロープ付き）
+            if self.reset_sound_remaining > 0 {
+                let freq1 = 800.0;
+                let freq2 = 1200.0;
+                let t = self.reset_sound_phase;
+                
+                // 2つの周波数を合成
+                let beep1 = (2.0 * std::f32::consts::PI * freq1 * t / SAMPLE_RATE as f32).sin();
+                let beep2 = (2.0 * std::f32::consts::PI * freq2 * t / SAMPLE_RATE as f32).sin();
+                let beep = (beep1 * 0.6 + beep2 * 0.4) * 0.3;
+                
+                // エンベロープ（フェードイン・フェードアウト）
+                let total_samples = (SAMPLE_RATE as usize) / 10;
+                let progress = 1.0 - (self.reset_sound_remaining as f32 / total_samples as f32);
+                let envelope = if progress < 0.1 {
+                    progress * 10.0  // フェードイン
+                } else if progress > 0.7 {
+                    (1.0 - progress) / 0.3  // フェードアウト
+                } else {
+                    1.0
+                };
+                
+                sample += beep * envelope * self.volume;
+                
+                self.reset_sound_phase += 1.0;
+                self.reset_sound_remaining -= 1;
+            }
+            
+            // UIクリック音をミックス（短いポップ音）
+            if self.ui_click_remaining > 0 {
+                let freq = 1500.0;  // 高めの周波数で軽快なクリック感
+                let t = self.ui_click_phase;
+                
+                // 減衰する正弦波
+                let total_samples = (SAMPLE_RATE as usize) / 33;
+                let progress = 1.0 - (self.ui_click_remaining as f32 / total_samples as f32);
+                
+                // 急激な立ち上がりとフェードアウト
+                let envelope = if progress < 0.05 {
+                    progress * 20.0  // 急速フェードイン
+                } else {
+                    (1.0 - progress).powf(2.0)  // 二次関数的フェードアウト
+                };
+                
+                let click = (2.0 * std::f32::consts::PI * freq * t / SAMPLE_RATE as f32).sin() * 0.2;
+                sample += click * envelope * self.volume;
+                
+                self.ui_click_phase += 1.0;
+                self.ui_click_remaining -= 1;
+            }
+            
+            self.sample_buffer[i] = sample;
         }
 
         // キューに残った古いイベントをクリーンアップ

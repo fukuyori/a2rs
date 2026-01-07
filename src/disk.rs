@@ -184,6 +184,8 @@ pub struct FloppyDisk {
     pub write_protected: bool,
     /// ディスクがロードされているか
     pub disk_loaded: bool,
+    /// ディスクファイル名（パス）
+    pub filename: Option<String>,
     /// 変更されたか
     pub modified: bool,
     /// トラック内のバイト位置
@@ -210,6 +212,7 @@ impl FloppyDisk {
             format: None,
             write_protected: false,
             disk_loaded: false,
+            filename: None,
             modified: false,
             byte_position: 0,
             nibbles: NIB_TRACK_SIZE,
@@ -225,6 +228,7 @@ impl FloppyDisk {
         self.format = None;
         self.write_protected = false;
         self.disk_loaded = false;
+        self.filename = None;
         self.modified = false;
         self.byte_position = 0;
         self.nibbles = NIB_TRACK_SIZE;
@@ -656,6 +660,11 @@ impl Disk2InterfaceCard {
 
     /// ディスクをロード
     pub fn insert_disk(&mut self, drive: usize, data: &[u8], format: DiskFormat) -> Result<(), &'static str> {
+        self.insert_disk_with_name(drive, data, format, None)
+    }
+    
+    /// ファイル名付きでディスクを挿入
+    pub fn insert_disk_with_name(&mut self, drive: usize, data: &[u8], format: DiskFormat, filename: Option<String>) -> Result<(), &'static str> {
         if drive > 1 {
             return Err("Invalid drive number");
         }
@@ -693,6 +702,7 @@ impl Disk2InterfaceCard {
         }
 
         floppy.disk_loaded = true;
+        floppy.filename = filename;
         floppy.modified = false;
         floppy.byte_position = 0;
         floppy.nibbles = NIB_TRACK_SIZE;

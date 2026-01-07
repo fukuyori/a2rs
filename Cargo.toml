@@ -1,6 +1,6 @@
 [package]
 name = "a2rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["A2RS Project"]
 description = "A2RS - Apple II Emulator written in Rust"
@@ -55,6 +55,10 @@ rodio = { version = "0.17", optional = true }
 # Ubuntu/Debian: sudo apt-get install libudev-dev
 gilrs = { version = "0.10", optional = true }
 
+# Clipboard support for text input
+# Linux: requires libxcb (sudo apt-get install libxcb-xfixes0-dev)
+arboard = "3.2"
+
 [features]
 default = []
 audio = ["rodio"]
@@ -67,3 +71,34 @@ lto = true
 
 [dependencies.bitflags]
 version = "2.4"
+
+# ============================================
+# Installer metadata
+# ============================================
+
+# cargo-deb metadata (Linux .deb package)
+[package.metadata.deb]
+maintainer = "A2RS Project"
+copyright = "2024, A2RS Project"
+license-file = ["LICENSE", "0"]
+extended-description = """
+A2RS is an Apple II emulator written in Rust.
+Supports Apple II, II+, IIe, and IIe Enhanced models.
+Features include accurate 6502/65C02 emulation, Disk II controller,
+Hi-Res graphics, sound, and gamepad support.
+"""
+section = "games"
+priority = "optional"
+assets = [
+    ["target/release/a2rs", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/a2rs/", "644"],
+]
+
+# cargo-wix metadata (Windows .msi installer)
+[package.metadata.wix]
+# Generate GUIDs with: uuidgen (Linux/macOS) or [guid]::NewGuid() (PowerShell)
+upgrade-guid = "E8F2C4A1-9B3D-4E5F-A6C7-8D9E0F1A2B3C"
+path-guid = "A1B2C3D4-E5F6-7890-1234-567890ABCDEF"
+license = false
+eula = false
+

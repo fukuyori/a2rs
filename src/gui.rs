@@ -105,7 +105,10 @@ pub struct EmulatorStatus {
     pub disk2_name: Option<String>,
     pub disk1_active: bool,
     pub disk2_active: bool,
+    pub disk1_writing: bool,
+    pub disk2_writing: bool,
     // ディレクトリ設定
+    pub a2rs_home: String,
     pub rom_dir: String,
     pub disk_dir: String,
     pub screenshot_dir: String,
@@ -128,6 +131,9 @@ impl Default for EmulatorStatus {
             disk2_name: None,
             disk1_active: false,
             disk2_active: false,
+            disk1_writing: false,
+            disk2_writing: false,
+            a2rs_home: String::new(),
             rom_dir: "roms".to_string(),
             disk_dir: "disks".to_string(),
             screenshot_dir: "screenshots".to_string(),
@@ -162,12 +168,22 @@ pub struct Gui {
     pub disk_menu_drive: Option<usize>,
     /// ディスクメニューの選択インデックス
     pub disk_menu_selection: usize,
+    /// ディスクメニューのスクロールオフセット
+    pub disk_menu_scroll: usize,
     /// 利用可能なディスクリスト
     pub available_disks: Vec<String>,
     /// テキスト入力モード（編集中の項目番号）
     pub text_input_mode: Option<usize>,
     /// テキスト入力バッファ
     pub text_input_buffer: String,
+    /// リセットボタンハイライト残り時間（フレーム数）
+    pub reset_highlight_frames: u32,
+    /// ボタンハイライト残り時間（各ボタン用）
+    pub button_highlight_frames: [u32; 8],
+    /// 音量スライダーをドラッグ中
+    pub volume_dragging: bool,
+    /// 現在の音量 (0.0 - 1.0)
+    pub volume: f32,
 }
 
 impl Gui {
@@ -182,10 +198,28 @@ impl Gui {
             clicked_button: None,
             disk_menu_drive: None,
             disk_menu_selection: 0,
+            disk_menu_scroll: 0,
             available_disks: Vec::new(),
             text_input_mode: None,
             text_input_buffer: String::new(),
+            reset_highlight_frames: 0,
+            button_highlight_frames: [0; 8],
+            volume_dragging: false,
+            volume: 0.5,
         }
+    }
+    
+    /// ボタンのハイライトをトリガー（短いフラッシュ）
+    pub fn trigger_button_highlight(&mut self, btn: ToolbarButton) {
+        let idx = btn as usize;
+        if idx < self.button_highlight_frames.len() {
+            self.button_highlight_frames[idx] = 10; // 約0.17秒
+        }
+    }
+    
+    /// リセットボタンのハイライトをトリガー（約0.3秒間）
+    pub fn trigger_reset_highlight(&mut self) {
+        self.reset_highlight_frames = 18; // 60fps * 0.3秒
     }
     
     /// テキスト入力モードを開始
@@ -255,14 +289,43 @@ impl Gui {
     pub fn open_disk_menu(&mut self, drive: usize, disks: Vec<String>) {
         self.disk_menu_drive = Some(drive);
         self.disk_menu_selection = 0;
+        self.disk_menu_scroll = 0;
         self.available_disks = disks;
         self.overlay_visible = false;  // 設定メニューを閉じる
+    }
+    
+    /// 現在のディスクにカーソルを合わせてディスクメニューを開く
+    pub fn open_disk_menu_at_current(&mut self, drive: usize, disks: Vec<String>, current_filename: Option<String>) {
+        self.disk_menu_drive = Some(drive);
+        self.available_disks = disks;
+        self.overlay_visible = false;
+        
+        // 現在のディスクを検索してカーソル位置を設定
+        let mut found_index = 0; // デフォルトはEject
+        if let Some(current) = current_filename {
+            for (i, disk_path) in self.available_disks.iter().enumerate() {
+                if disk_path == &current {
+                    found_index = i + 1; // +1 for Eject option
+                    break;
+                }
+            }
+        }
+        
+        self.disk_menu_selection = found_index;
+        
+        // スクロール位置を調整して選択項目が見えるようにする
+        if self.disk_menu_selection >= Self::DISK_MENU_MAX_VISIBLE {
+            self.disk_menu_scroll = self.disk_menu_selection - Self::DISK_MENU_MAX_VISIBLE / 2;
+        } else {
+            self.disk_menu_scroll = 0;
+        }
     }
     
     /// ディスクメニューを閉じる
     pub fn close_disk_menu(&mut self) {
         self.disk_menu_drive = None;
         self.disk_menu_selection = 0;
+        self.disk_menu_scroll = 0;
     }
     
     /// ディスクメニューが開いているか
@@ -270,10 +333,17 @@ impl Gui {
         self.disk_menu_drive.is_some()
     }
     
+    /// 表示可能な最大項目数
+    const DISK_MENU_MAX_VISIBLE: usize = 15;
+    
     /// ディスクメニューの選択を上に移動
     pub fn disk_menu_up(&mut self) {
         if self.disk_menu_selection > 0 {
             self.disk_menu_selection -= 1;
+            // スクロール調整
+            if self.disk_menu_selection < self.disk_menu_scroll {
+                self.disk_menu_scroll = self.disk_menu_selection;
+            }
         }
     }
     
@@ -282,6 +352,10 @@ impl Gui {
         let max_items = 1 + self.available_disks.len();  // Eject + ディスク数
         if self.disk_menu_selection < max_items - 1 {
             self.disk_menu_selection += 1;
+            // スクロール調整
+            if self.disk_menu_selection >= self.disk_menu_scroll + Self::DISK_MENU_MAX_VISIBLE {
+                self.disk_menu_scroll = self.disk_menu_selection - Self::DISK_MENU_MAX_VISIBLE + 1;
+            }
         }
     }
     
@@ -296,6 +370,58 @@ impl Gui {
             self.close_disk_menu();
             return Some((drive, action));
         }
+        None
+    }
+    
+    /// ディスクメニュー内でのマウスクリック処理
+    /// 戻り値: Some((drive, action)) = 選択された, None = メニュー外クリックでキャンセル
+    pub fn disk_menu_click(&mut self, screen_width: usize, screen_height: usize) -> Option<(usize, DiskMenuAction)> {
+        if self.disk_menu_drive.is_none() {
+            return None;
+        }
+        
+        let drive = self.disk_menu_drive.unwrap();
+        
+        // メニューの位置とサイズ（draw_disk_menuと同じ計算）
+        let total_items = 1 + self.available_disks.len();
+        let visible_items = total_items.min(Self::DISK_MENU_MAX_VISIBLE);
+        let menu_width = 500usize;  // draw_disk_menuと同じ幅（60文字表示用）
+        let menu_height = 80 + visible_items * 18 + 25;
+        let menu_x = (screen_width.saturating_sub(menu_width)) / 2;
+        let menu_y = (screen_height.saturating_sub(menu_height)) / 2;
+        
+        let mx = self.mouse_x as usize;
+        let my = self.mouse_y as usize;
+        
+        // メニュー外をクリックした場合はキャンセル
+        if mx < menu_x || mx >= menu_x + menu_width || my < menu_y || my >= menu_y + menu_height {
+            self.close_disk_menu();
+            return None;
+        }
+        
+        // メニュー項目のY座標
+        let start_y = menu_y + 55;
+        let scroll = self.disk_menu_scroll;
+        
+        // クリックされた項目を判定（スクロールを考慮）
+        for display_row in 0..visible_items {
+            let item_y = start_y + display_row * 18;
+            if my >= item_y && my < item_y + 18 && mx >= menu_x + 10 && mx < menu_x + menu_width - 10 {
+                let item_index = scroll + display_row;
+                if item_index < total_items {
+                    self.disk_menu_selection = item_index;
+                    let action = if item_index == 0 {
+                        DiskMenuAction::Eject
+                    } else {
+                        DiskMenuAction::InsertDisk(item_index - 1)
+                    };
+                    self.close_disk_menu();
+                    return Some((drive, action));
+                }
+            }
+        }
+        
+        // メニュー内だが項目以外の部分をクリック
         None
     }
     
@@ -314,7 +440,7 @@ impl Gui {
     }
     
     /// ツールバーを描画
-    pub fn draw_toolbar(&self, buffer: &mut [u32], width: usize, status: &EmulatorStatus) {
+    pub fn draw_toolbar(&mut self, buffer: &mut [u32], width: usize, status: &EmulatorStatus) {
         if self.fullscreen {
             return;
         }
@@ -330,30 +456,205 @@ impl Gui {
         let start_x = ICON_SPACING;
         let button_width = ICON_SIZE + ICON_SPACING + 8;  // 少し広めに
         
+        // リセットハイライトを更新
+        if self.reset_highlight_frames > 0 {
+            self.reset_highlight_frames -= 1;
+        }
+        
+        // ボタンハイライトを更新
+        for i in 0..self.button_highlight_frames.len() {
+            if self.button_highlight_frames[i] > 0 {
+                self.button_highlight_frames[i] -= 1;
+            }
+        }
+        
         for (i, btn) in ToolbarButton::all().iter().enumerate() {
             let btn_x = start_x + i * button_width;
-            let is_hover = self.hover_button == Some(*btn);
+            let btn_idx = *btn as usize;
+            let has_highlight = btn_idx < self.button_highlight_frames.len() 
+                && self.button_highlight_frames[btn_idx] > 0;
             
             // ボタンの状態に応じた色
-            let color = if is_hover {
-                COLOR_ICON_HOVER
+            let color = if has_highlight {
+                // クリック直後のハイライト（シアン）
+                0x00FFFF
             } else {
                 match btn {
-                    ToolbarButton::PlayPause if status.paused => COLOR_ICON_ACTIVE,
-                    ToolbarButton::Disk1 if status.disk1_active => COLOR_ICON_ACTIVE,
-                    ToolbarButton::Disk2 if status.disk2_active => COLOR_ICON_ACTIVE,
+                    ToolbarButton::PlayPause if status.paused => 0xFFAA00,  // 一時停止中はオレンジ
+                    ToolbarButton::Disk1 if status.disk1_writing => 0xFF4444,  // 書き込み中は赤
+                    ToolbarButton::Disk1 if status.disk1_active => COLOR_ICON_ACTIVE,  // 読み込み中は緑
+                    ToolbarButton::Disk2 if status.disk2_writing => 0xFF4444,  // 書き込み中は赤
+                    ToolbarButton::Disk2 if status.disk2_active => COLOR_ICON_ACTIVE,  // 読み込み中は緑
+                    ToolbarButton::Reset if self.reset_highlight_frames > 0 => {
+                        // リセットボタンのハイライト（オレンジ〜赤のパルス）
+                        let intensity = (self.reset_highlight_frames as f32 / 18.0).min(1.0);
+                        let pulse = ((self.reset_highlight_frames as f32 * 0.5).sin() * 0.5 + 0.5) * intensity;
+                        let r = (255.0 * (0.8 + 0.2 * pulse)) as u32;
+                        let g = (128.0 * (1.0 - pulse * 0.5)) as u32;
+                        let b = (64.0 * (1.0 - pulse)) as u32;
+                        (r << 16) | (g << 8) | b
+                    }
                     _ => COLOR_ICON_NORMAL,
                 }
             };
+            
+            // リセットボタンの背景ハイライト
+            if *btn == ToolbarButton::Reset && self.reset_highlight_frames > 0 {
+                let intensity = (self.reset_highlight_frames as f32 / 18.0).min(1.0);
+                let bg_alpha = (intensity * 0.3) as f32;
+                let bg_color = 0xFF6600; // オレンジ
+                
+                // ボタン背景をハイライト
+                for dy in 0..ICON_SIZE {
+                    for dx in 0..(ICON_SIZE + 4) {
+                        let px = btn_x + dx;
+                        let py = 2 + dy;
+                        if px < width && py < TOOLBAR_HEIGHT {
+                            let idx = py * width + px;
+                            if idx < buffer.len() {
+                                let existing = buffer[idx];
+                                let er = ((existing >> 16) & 0xFF) as f32;
+                                let eg = ((existing >> 8) & 0xFF) as f32;
+                                let eb = (existing & 0xFF) as f32;
+                                let hr = ((bg_color >> 16) & 0xFF) as f32;
+                                let hg = ((bg_color >> 8) & 0xFF) as f32;
+                                let hb = (bg_color & 0xFF) as f32;
+                                let r = (er * (1.0 - bg_alpha) + hr * bg_alpha) as u32;
+                                let g = (eg * (1.0 - bg_alpha) + hg * bg_alpha) as u32;
+                                let b = (eb * (1.0 - bg_alpha) + hb * bg_alpha) as u32;
+                                buffer[idx] = (r << 16) | (g << 8) | b;
+                            }
+                        }
+                    }
+                }
+            }
             
             // グラフィカルアイコンを描画
             self.draw_icon(buffer, width, btn_x + 4, 4, *btn, status.paused, color);
         }
         
+        // 音量スライダーを右端に描画
+        self.draw_volume_slider(buffer, width, status.sound_enabled);
+        
         // 下部の区切り線
         for x in 0..width {
             buffer[(TOOLBAR_HEIGHT - 1) * width + x] = COLOR_SEPARATOR;
         }
+    }
+    
+    /// 音量スライダーの位置とサイズ
+    const VOLUME_SLIDER_WIDTH: usize = 60;
+    const VOLUME_SLIDER_HEIGHT: usize = 12;
+    const VOLUME_SLIDER_MARGIN: usize = 8;
+    
+    /// 音量スライダーのX座標を取得
+    fn get_volume_slider_x(&self, width: usize) -> usize {
+        width.saturating_sub(Self::VOLUME_SLIDER_WIDTH + Self::VOLUME_SLIDER_MARGIN)
+    }
+    
+    /// 音量スライダーを描画
+    fn draw_volume_slider(&self, buffer: &mut [u32], width: usize, sound_enabled: bool) {
+        let slider_x = self.get_volume_slider_x(width);
+        let slider_y = (TOOLBAR_HEIGHT - Self::VOLUME_SLIDER_HEIGHT) / 2;
+        
+        // スピーカーアイコン
+        let icon_color = if sound_enabled { COLOR_ICON_NORMAL } else { COLOR_ICON_DISABLED };
+        // スピーカー本体
+        for row in 0..8 {
+            let x_offset = if row >= 2 && row < 6 { 0 } else { 2 };
+            for col in x_offset..4 {
+                self.set_pixel(buffer, width, slider_x - 20 + col, slider_y + 2 + row, icon_color);
+            }
+        }
+        // スピーカーコーン
+        for row in 0..10 {
+            let w = row.min(9 - row) + 1;
+            for col in 0..w {
+                self.set_pixel(buffer, width, slider_x - 16 + col, slider_y + 1 + row, icon_color);
+            }
+        }
+        
+        // ミュート時はバツ印
+        if !sound_enabled {
+            for i in 0..6 {
+                self.set_pixel(buffer, width, slider_x - 8 + i, slider_y + 3 + i, 0xFF4444);
+                self.set_pixel(buffer, width, slider_x - 8 + i, slider_y + 8 - i, 0xFF4444);
+            }
+        }
+        
+        // スライダー背景（トラック）
+        let track_y = slider_y + Self::VOLUME_SLIDER_HEIGHT / 2 - 1;
+        for x in 0..Self::VOLUME_SLIDER_WIDTH {
+            self.set_pixel(buffer, width, slider_x + x, track_y, COLOR_SEPARATOR);
+            self.set_pixel(buffer, width, slider_x + x, track_y + 1, COLOR_SEPARATOR);
+        }
+        
+        // 塗りつぶし部分（現在の音量）
+        let fill_width = (self.volume * Self::VOLUME_SLIDER_WIDTH as f32) as usize;
+        let fill_color = if sound_enabled { COLOR_ICON_ACTIVE } else { COLOR_ICON_DISABLED };
+        for x in 0..fill_width {
+            self.set_pixel(buffer, width, slider_x + x, track_y, fill_color);
+            self.set_pixel(buffer, width, slider_x + x, track_y + 1, fill_color);
+        }
+        
+        // ノブ（つまみ）
+        let knob_x = slider_x + fill_width;
+        let knob_color = if self.volume_dragging { COLOR_TEXT_BRIGHT } else { COLOR_TEXT };
+        for row in 0..Self::VOLUME_SLIDER_HEIGHT {
+            for col in 0..4 {
+                if knob_x + col < width {
+                    self.set_pixel(buffer, width, knob_x + col, slider_y + row, knob_color);
+                }
+            }
+        }
+    }
+    
+    /// 音量スライダー上にマウスがあるかチェック
+    pub fn is_over_volume_slider(&self, width: usize) -> bool {
+        if self.fullscreen {
+            return false;
+        }
+        let slider_x = self.get_volume_slider_x(width);
+        let slider_y = (TOOLBAR_HEIGHT - Self::VOLUME_SLIDER_HEIGHT) / 2;
+        
+        self.mouse_x >= (slider_x - 20) as f32 
+            && self.mouse_x < (slider_x + Self::VOLUME_SLIDER_WIDTH + 4) as f32
+            && self.mouse_y >= slider_y as f32 
+            && self.mouse_y < (slider_y + Self::VOLUME_SLIDER_HEIGHT) as f32
+    }
+    
+    /// 音量スライダーのドラッグ開始
+    pub fn start_volume_drag(&mut self, width: usize) {
+        if self.is_over_volume_slider(width) {
+            self.volume_dragging = true;
+            self.update_volume_from_mouse(width);
+        }
+    }
+    
+    /// 音量スライダーのドラッグ終了
+    pub fn end_volume_drag(&mut self) {
+        self.volume_dragging = false;
+    }
+    
+    /// マウス位置から音量を更新
+    pub fn update_volume_from_mouse(&mut self, width: usize) -> bool {
+        if !self.volume_dragging {
+            return false;
+        }
+        let slider_x = self.get_volume_slider_x(width);
+        let relative_x = self.mouse_x - slider_x as f32;
+        self.volume = (relative_x / Self::VOLUME_SLIDER_WIDTH as f32).clamp(0.0, 1.0);
+        true
+    }
+    
+    /// 音量を設定
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
+    }
+    
+    /// 音量を取得
+    pub fn get_volume(&self) -> f32 {
+        self.volume
     }
     
     /// グラフィカルアイコンを描画
@@ -596,11 +897,10 @@ impl Gui {
         }
         
         // タイトル
-        self.draw_text(buffer, width, menu_x + 80, menu_y + 12, "SETTINGS (ESC)", COLOR_ICON_ACTIVE);
+        self.draw_text(buffer, width, menu_x + 80, menu_y + 12, "SETTINGS (F1)", COLOR_ICON_ACTIVE);
         
         // メニュー項目の値を事前に計算
         let speed_str = if status.speed == 0 { "MAX".to_string() } else { format!("x{}", status.speed) };
-        let fast_disk_str = if status.fast_disk { "ON" } else { "OFF" };
         let quality_str = match status.quality_level {
             0 => "Lowest",
             1 => "Low", 
@@ -614,6 +914,7 @@ impl Gui {
         let truncate = |s: &str, max: usize| -> String {
             if s.len() > max { format!("{}...", &s[..max-3]) } else { s.to_string() }
         };
+        let home_dir_str = if status.a2rs_home.is_empty() { "(exe dir)".to_string() } else { truncate(&status.a2rs_home, 12) };
         let rom_dir_str = truncate(&status.rom_dir, 12);
         let disk_dir_str = truncate(&status.disk_dir, 12);
         let screenshot_dir_str = truncate(&status.screenshot_dir, 12);
@@ -621,10 +922,9 @@ impl Gui {
         
         let items: Vec<(&str, String)> = vec![
             ("Speed", speed_str),
-            ("Fast Disk", fast_disk_str.to_string()),
             ("Quality", quality_str.to_string()),
             ("Auto Quality", auto_quality_str.to_string()),
-            ("---", "---".to_string()),
+            ("A2RS Home", home_dir_str),
             ("ROM Dir", rom_dir_str),
             ("Disk Dir", disk_dir_str),
             ("Screenshot Dir", screenshot_dir_str),
@@ -687,12 +987,13 @@ impl Gui {
             buffer[i] = (r << 16) | (g << 8) | b;
         }
         
-        // メニューサイズ計算
-        let item_count = 1 + self.available_disks.len();  // Eject + ディスク数
-        let menu_width = 300;
-        let menu_height = 60 + item_count * 20 + 20;
-        let menu_x = (width - menu_width) / 2;
-        let menu_y = (height - menu_height) / 2;
+        // メニューサイズ計算（最大表示数で制限）
+        let total_items = 1 + self.available_disks.len();  // Eject + ディスク数
+        let visible_items = total_items.min(Self::DISK_MENU_MAX_VISIBLE);
+        let menu_width = 500;  // 横60文字表示用（8px/文字 * 60 + マージン）
+        let menu_height = 80 + visible_items * 18 + 25;
+        let menu_x = (width.saturating_sub(menu_width)) / 2;
+        let menu_y = (height.saturating_sub(menu_height)) / 2;
         
         // パネル背景
         for y in menu_y..menu_y + menu_height {
@@ -720,41 +1021,109 @@ impl Gui {
         }
         
         // タイトル
-        let title = format!("DISK {} MENU", drive + 1);
-        self.draw_text(buffer, width, menu_x + 100, menu_y + 12, &title, COLOR_ICON_ACTIVE);
+        let title = format!("DISK {} ({}/{})", drive + 1, self.disk_menu_selection + 1, total_items);
+        self.draw_text(buffer, width, menu_x + 200, menu_y + 12, &title, COLOR_ICON_ACTIVE);
         
-        // 現在のディスク名
-        let current = current_disk_name.unwrap_or("(empty)");
-        let current_label = format!("Current: {}", current);
-        self.draw_text(buffer, width, menu_x + 20, menu_y + 32, &current_label, COLOR_TEXT);
+        // 現在のディスク名（ファイル名のみ表示、60文字まで）
+        let current_filename = current_disk_name
+            .map(|name| std::path::Path::new(name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(name))
+            .unwrap_or("(empty)");
+        let current_display = if current_filename.len() > 55 {
+            format!("{}...", &current_filename[..52])
+        } else {
+            current_filename.to_string()
+        };
+        self.draw_text(buffer, width, menu_x + 10, menu_y + 32, &format!("Now: {}", current_display), COLOR_TEXT);
         
-        // メニュー項目
+        // メニュー項目（スクロール対応）
         let start_y = menu_y + 55;
+        let scroll = self.disk_menu_scroll;
         
-        // Eject
-        let is_selected = self.disk_menu_selection == 0;
-        let color = if is_selected { COLOR_ICON_ACTIVE } else { COLOR_TEXT };
-        let prefix = if is_selected { "> " } else { "  " };
-        self.draw_text(buffer, width, menu_x + 20, start_y, &format!("{}[Eject]", prefix), color);
+        // スクロールインジケーター（上）
+        if scroll > 0 {
+            self.draw_text(buffer, width, menu_x + menu_width / 2 - 10, start_y - 12, "^^^", COLOR_ICON_DISABLED);
+        }
         
-        // 利用可能なディスク
-        for (i, disk_name) in self.available_disks.iter().enumerate() {
-            let is_selected = self.disk_menu_selection == i + 1;
-            let color = if is_selected { COLOR_ICON_ACTIVE } else { COLOR_TEXT };
-            let prefix = if is_selected { "> " } else { "  " };
-            // ディスク名を短縮
-            let display_name = if disk_name.len() > 32 {
-                format!("{}...", &disk_name[..29])
+        // 表示する項目のインデックス範囲
+        let visible_start = scroll;
+        let visible_end = (scroll + Self::DISK_MENU_MAX_VISIBLE).min(total_items);
+        
+        for display_row in 0..(visible_end - visible_start) {
+            let item_index = visible_start + display_row;
+            let is_selected = self.disk_menu_selection == item_index;
+            
+            if item_index == 0 {
+                // Eject項目
+                let is_current_empty = current_disk_name.is_none();
+                let color = if is_selected { 
+                    COLOR_ICON_ACTIVE 
+                } else if is_current_empty {
+                    0x6688AA
+                } else { 
+                    COLOR_TEXT 
+                };
+                let prefix = if is_selected { "> " } else { "  " };
+                let suffix = if is_current_empty && !is_selected { " *" } else { "" };
+                self.draw_text(buffer, width, menu_x + 10, start_y + display_row * 18, 
+                    &format!("{}[Eject]{}", prefix, suffix), color);
             } else {
-                disk_name.clone()
-            };
-            self.draw_text(buffer, width, menu_x + 20, start_y + (i + 1) * 20, 
-                &format!("{}{}", prefix, display_name), color);
+                // ディスク項目
+                let disk_index = item_index - 1;
+                if let Some(disk_name) = self.available_disks.get(disk_index) {
+                    // ファイル名のみ取得
+                    let filename = std::path::Path::new(disk_name)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(disk_name);
+                    
+                    // 現在挿入されているディスクかどうかを判定
+                    let is_current_disk = if let Some(current_name) = current_disk_name {
+                        let current_filename = std::path::Path::new(current_name)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(current_name);
+                        current_filename == filename
+                    } else {
+                        false
+                    };
+                    
+                    let color = if is_selected { 
+                        COLOR_ICON_ACTIVE
+                    } else if is_current_disk {
+                        0x6688AA
+                    } else { 
+                        COLOR_TEXT 
+                    };
+                    
+                    let prefix = if is_selected { ">" } else { " " };
+                    
+                    // ファイル名を60文字に制限
+                    let display_name = if filename.len() > 60 {
+                        format!("{}...", &filename[..57])
+                    } else {
+                        filename.to_string()
+                    };
+                    
+                    let suffix = if is_current_disk && !is_selected { " *" } else { "" };
+                    
+                    self.draw_text(buffer, width, menu_x + 10, start_y + display_row * 18, 
+                        &format!("{}{}{}", prefix, display_name, suffix), color);
+                }
+            }
+        }
+        
+        // スクロールインジケーター（下）
+        if visible_end < total_items {
+            self.draw_text(buffer, width, menu_x + menu_width / 2 - 10, 
+                start_y + visible_items * 18, "vvv", COLOR_ICON_DISABLED);
         }
         
         // 操作説明
-        self.draw_text(buffer, width, menu_x + 20, menu_y + menu_height - 20, 
-            "Up/Down: Select  Enter: OK  ESC: Cancel", COLOR_ICON_DISABLED);
+        self.draw_text(buffer, width, menu_x + 20, menu_y + menu_height - 18, 
+            "Up/Down:Select Enter:OK ESC:Cancel *=Current", COLOR_ICON_DISABLED);
     }
     
     /// 簡易テキスト描画（固定幅フォント風）
@@ -787,21 +1156,13 @@ impl Gui {
     pub fn overlay_up(&mut self) {
         if self.overlay_selection > 0 {
             self.overlay_selection -= 1;
-            // セパレータ(4)をスキップ
-            if self.overlay_selection == 4 {
-                self.overlay_selection -= 1;
-            }
         }
     }
     
     /// オーバーレイメニューの選択を下に移動
     pub fn overlay_down(&mut self) {
-        if self.overlay_selection < 8 {
+        if self.overlay_selection < 7 {  // 8項目 (0-7)
             self.overlay_selection += 1;
-            // セパレータ(4)をスキップ
-            if self.overlay_selection == 4 {
-                self.overlay_selection += 1;
-            }
         }
     }
     
@@ -810,9 +1171,9 @@ impl Gui {
         self.overlay_visible = !self.overlay_visible;
     }
     
-    /// 全画面モードをトグル
+    /// 全画面モードをトグル（機能削除のため何もしない）
     pub fn toggle_fullscreen(&mut self) {
-        self.fullscreen = !self.fullscreen;
+        // 全画面モードは削除されました
     }
 }
 

@@ -41,20 +41,21 @@ use cpu::MemoryBus;
 use video::{SCREEN_WIDTH, SCREEN_HEIGHT};
 use sound::{Speaker, AudioOutput};
 use gamepad::GamepadManager;
-use config::{Config, SaveSlots};
+use config::{Config, SaveSlots, get_exe_dir};
 use gui::{Gui, EmulatorStatus, ToolbarButton, DiskMenuAction, TOOLBAR_HEIGHT, STATUSBAR_HEIGHT};
 use gui::{DebuggerPanel, CpuRegisters, DiskDebugInfo, DEBUGGER_PANEL_WIDTH};
 use profiler::{Profiler, Debugger};
 use clap::Parser;
 use minifb::{Key, Window, WindowOptions, KeyRepeat, MouseMode, MouseButton};
 use std::fs;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// A2RS - Apple II Emulator in Rust
 #[derive(Parser, Debug)]
 #[command(name = "a2rs")]
 #[command(author = "A2RS Project")]
-#[command(version = "0.1.0")]
+#[command(version = "0.2.0")]
 #[command(about = "A2RS - Apple II Emulator in Rust", long_about = None)]
 struct Args {
     /// ディスクイメージファイル（ドライブ1）
@@ -150,6 +151,14 @@ struct Args {
     /// 起動ブーストのログを出力
     #[arg(long)]
     boost_log: bool,
+    
+    /// 設定ファイルのパス（指定しない場合はa2rs_home/apple2_config.jsonまたは実行ファイルディレクトリ）
+    #[arg(short, long)]
+    config: Option<String>,
+    
+    /// A2RSホームディレクトリ（相対パスの基準、設定ファイルより優先）
+    #[arg(long)]
+    home: Option<String>,
 }
 
 /// スクリーンショットをPNGで保存
@@ -174,32 +183,83 @@ fn save_screenshot(filename: &str, fb: &[u32], width: usize, height: usize) -> R
 }
 
 /// ディスクディレクトリからディスクファイル一覧を取得
-fn get_available_disks() -> Vec<String> {
+fn get_available_disks(a2rs_home: &str, disk_dir: &str) -> Vec<String> {
     let mut disks = Vec::new();
     
-    // disksディレクトリを検索
-    let disk_dirs = ["disks", ".", "roms"];
+    // 設定されたディスクディレクトリを絶対パスに解決（a2rs_homeを基準）
+    let resolved_disk_dir: PathBuf = config::resolve_path_with_base(a2rs_home, disk_dir);
     
-    for dir in &disk_dirs {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                if let Ok(file_name) = entry.file_name().into_string() {
-                    let lower = file_name.to_lowercase();
-                    if lower.ends_with(".dsk") || lower.ends_with(".do") || 
-                       lower.ends_with(".po") || lower.ends_with(".nib") {
-                        // フルパスで保存
-                        let path = format!("{}/{}", dir, file_name);
-                        if !disks.contains(&path) {
-                            disks.push(path);
+    // 検索するディレクトリ
+    let mut dirs_to_search: Vec<PathBuf> = vec![resolved_disk_dir.clone()];
+    
+    // a2rs_homeのdisksフォルダも検索（disk_dirと異なる場合）
+    let home_disks: PathBuf = if a2rs_home.is_empty() {
+        get_exe_dir().join("disks")
+    } else {
+        config::resolve_path_with_base(a2rs_home, "disks")
+    };
+    if home_disks != resolved_disk_dir && home_disks.exists() {
+        dirs_to_search.push(home_disks);
+    }
+    
+    for dir in dirs_to_search.iter() {
+        if let Some(dir_str) = dir.to_str() {
+            collect_disk_files(dir_str, &mut disks, 0);
+        }
+    }
+    
+    // ファイル名でソート（大文字小文字を区別しない）
+    disks.sort_by(|a, b| {
+        let name_a = std::path::Path::new(a)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(a)
+            .to_lowercase();
+        let name_b = std::path::Path::new(b)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(b)
+            .to_lowercase();
+        name_a.cmp(&name_b)
+    });
+    
+    disks
+}
+
+/// ディスクファイルを再帰的に収集（最大深度3）
+fn collect_disk_files(dir: &str, disks: &mut Vec<String>, depth: usize) {
+    const MAX_DEPTH: usize = 3;
+    
+    if depth > MAX_DEPTH {
+        return;
+    }
+    
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            
+            if path.is_dir() {
+                // サブディレクトリを再帰的に検索
+                if let Some(path_str) = path.to_str() {
+                    // 隠しフォルダーをスキップ
+                    if !path_str.contains("/.") && !path_str.contains("\\.") {
+                        collect_disk_files(path_str, disks, depth + 1);
+                    }
+                }
+            } else if let Ok(file_name) = entry.file_name().into_string() {
+                let lower = file_name.to_lowercase();
+                if lower.ends_with(".dsk") || lower.ends_with(".do") || 
+                   lower.ends_with(".po") || lower.ends_with(".nib") {
+                    // フルパスで保存
+                    if let Some(path_str) = path.to_str() {
+                        if !disks.contains(&path_str.to_string()) {
+                            disks.push(path_str.to_string());
                         }
                     }
                 }
             }
         }
     }
-    
-    disks.sort();
-    disks
 }
 
 /// 最速のニアレストネイバースケーリング（アスペクト比維持）
@@ -779,19 +839,20 @@ fn main() {
             }
         }
     } else {
-        // 自動的にdisk2.romを探す
+        // 自動的にdisk2.romを探す（実行ファイルディレクトリ基準）
+        let exe_dir = get_exe_dir();
         let search_paths = [
-            "roms/disk2.rom",
-            "disk2.rom",
-            "DISK2.rom",
-            "roms/DISK2.rom",
+            exe_dir.join("roms/disk2.rom"),
+            exe_dir.join("disk2.rom"),
+            exe_dir.join("DISK2.rom"),
+            exe_dir.join("roms/DISK2.rom"),
         ];
         
         let mut loaded = false;
         for path in &search_paths {
             if let Ok(data) = fs::read(path) {
                 if let Ok(()) = emu.load_disk_rom(&data) {
-                    log::info!("Loaded Disk II Boot ROM: {}", path);
+                    log::info!("Loaded Disk II Boot ROM: {:?}", path);
                     loaded = true;
                     break;
                 }
@@ -872,7 +933,7 @@ fn main() {
             interval: args.profile_interval,
             boot_only: args.profile_boot,
         };
-        run_with_window(&mut emu, args.speed, width, height, args.fullscreen, profile_opts);
+        run_with_window(&mut emu, args.speed, width, height, args.fullscreen, profile_opts, args.config.clone(), args.home.clone());
     }
 }
 
@@ -905,7 +966,7 @@ struct ProfileOptions {
     boot_only: bool,
 }
 
-fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height: usize, fullscreen: bool, profile_opts: ProfileOptions) {
+fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height: usize, fullscreen: bool, profile_opts: ProfileOptions, config_path: Option<String>, home_path: Option<String>) {
     // 初期ウィンドウサイズ
     // GUI用にツールバーとステータスバーの高さを考慮したウィンドウサイズ
     let gui_height = TOOLBAR_HEIGHT + STATUSBAR_HEIGHT;
@@ -969,8 +1030,25 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
     // エフェクト設定
     let frame_blend_enabled = true;
 
-    // 設定ファイルを読み込み
-    let mut config = Config::load();
+    // 設定ファイルを読み込み（コマンドラインオプションを考慮）
+    let (mut config, config_file_path) = Config::load_with_options(
+        config_path.as_deref(),
+        home_path.as_deref()
+    );
+    
+    // 起動情報を表示
+    println!("=== A2RS Apple II Emulator ===");
+    println!("Executable dir: {:?}", get_exe_dir());
+    println!("Config file: {:?}", config_file_path);
+    let home_display = if config.a2rs_home.is_empty() { "(exe dir)".to_string() } else { config.a2rs_home.clone() };
+    println!("A2RS Home: {} -> {:?}", home_display, config.home_dir_path());
+    println!("Directories (relative to a2rs_home):");
+    println!("  ROM:         {} -> {:?}", config.rom_dir, config.rom_dir_path());
+    println!("  Disks:       {} -> {:?}", config.disk_dir, config.disk_dir_path());
+    println!("  Screenshots: {} -> {:?}", config.screenshot_dir, config.screenshot_dir_path());
+    println!("  Saves:       {} -> {:?}", config.save_dir, config.save_dir_path());
+    println!("Edit config file to change directories.");
+    println!();
     
     // エミュレータ一時停止フラグ
     let mut paused = false;
@@ -983,7 +1061,8 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
     let base_frame_duration = Duration::from_micros(16667); // 60 FPS
     let mut prev_keys: Vec<Key> = Vec::new();
     let mut current_speed = speed;
-    let mut fast_disk_enabled = true;
+    let fast_disk_enabled = true;  // 高速ディスクは常にON
+    emu.set_fast_disk(true);
     
     // 起動ブースト: ディスクがロードされている場合、MAXスピードで起動
     let disk_loaded = emu.disk.drives[0].disk.disk_loaded;
@@ -1001,7 +1080,11 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
         }
     };
     let mut speaker = Speaker::new();
+    speaker.set_volume(config.volume);
     let mut sound_enabled = true;
+    
+    // GUIの音量も設定から初期化
+    gui.set_volume(config.volume);
     
     // フレームレート計測用
     let mut frame_times: [f64; 60] = [16.667; 60]; // 過去60フレームの時間(ms)
@@ -1069,82 +1152,27 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
             mouse_clicked && !was_down
         };
         
-        if click_event && !gui.fullscreen {
-            if let Some(btn) = gui.mouse_click() {
-                match btn {
-                    ToolbarButton::PlayPause => {
-                        paused = !paused;
-                    }
-                    ToolbarButton::Reset => {
-                        emu.reset();
-                    }
-                    ToolbarButton::Disk1 => {
-                        let disks = get_available_disks();
-                        gui.open_disk_menu(0, disks);
-                    }
-                    ToolbarButton::Disk2 => {
-                        let disks = get_available_disks();
-                        gui.open_disk_menu(1, disks);
-                    }
-                    ToolbarButton::SwapDisks => {
-                        emu.disk.swap_disks();
-                    }
-                    ToolbarButton::QuickSave => {
-                        let state = emu.save_state();
-                        let filename = SaveSlots::get_filename(current_slot);
-                        if let Ok(json) = serde_json::to_string(&state) {
-                            if let Ok(_) = std::fs::write(&filename, &json) {
-                                println!("Saved to slot {}", current_slot);
-                            }
-                        }
-                    }
-                    ToolbarButton::QuickLoad => {
-                        let filename = SaveSlots::get_filename(current_slot);
-                        if let Ok(json) = std::fs::read_to_string(&filename) {
-                            if let Ok(state) = serde_json::from_str(&json) {
-                                if let Ok(_) = emu.load_state(&state) {
-                                    println!("Loaded from slot {}", current_slot);
-                                }
-                            }
-                        }
-                    }
-                    ToolbarButton::Screenshot => {
-                        let filename = format!("screenshot_{}.png", 
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs());
-                        let fb = emu.get_framebuffer();
-                        if save_screenshot(&filename, fb, SCREEN_WIDTH, SCREEN_HEIGHT).is_ok() {
-                            println!("Screenshot saved: {}", filename);
-                        }
-                    }
-                    ToolbarButton::Fullscreen => {
-                        gui.toggle_fullscreen();
-                    }
+        // 音量スライダーのドラッグ処理
+        if gui.volume_dragging {
+            if mouse_clicked {
+                if gui.update_volume_from_mouse(current_window_width) {
+                    speaker.set_volume(gui.get_volume());
                 }
-            }
-        }
-        
-        // ESCでメニュー操作
-        if window.is_key_pressed(Key::Escape, KeyRepeat::No) {
-            if gui.is_disk_menu_open() {
-                gui.close_disk_menu();
             } else {
-                gui.toggle_overlay();
+                gui.end_volume_drag();
             }
         }
         
-        // ディスクメニュー操作
-        if gui.is_disk_menu_open() {
-            if window.is_key_pressed(Key::Up, KeyRepeat::Yes) {
-                gui.disk_menu_up();
+        if click_event && !gui.fullscreen {
+            // 音量スライダーのクリック
+            if gui.is_over_volume_slider(current_window_width) {
+                gui.start_volume_drag(current_window_width);
+                speaker.set_volume(gui.get_volume());
             }
-            if window.is_key_pressed(Key::Down, KeyRepeat::Yes) {
-                gui.disk_menu_down();
-            }
-            if window.is_key_pressed(Key::Enter, KeyRepeat::No) {
-                if let Some((drive, action)) = gui.disk_menu_select() {
+            // ディスクメニューが開いている場合は、メニュー内クリックを優先
+            else if gui.is_disk_menu_open() {
+                if let Some((drive, action)) = gui.disk_menu_click(current_window_width, current_window_height) {
+                    speaker.trigger_ui_click();  // 選択決定音
                     match action {
                         DiskMenuAction::Eject => {
                             emu.disk.eject_disk(drive);
@@ -1161,7 +1189,139 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
                                     } else {
                                         disk::DiskFormat::Dsk
                                     };
-                                    if emu.disk.insert_disk(drive, &data, format).is_ok() {
+                                    if emu.disk.insert_disk_with_name(drive, &data, format, Some(path.clone())).is_ok() {
+                                        println!("Inserted {} into drive {}", path, drive + 1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // メニュー外クリックでキャンセル（クリック音なし、静かにキャンセル）
+                }
+            } else if let Some(btn) = gui.mouse_click() {
+                match btn {
+                    ToolbarButton::PlayPause => {
+                        paused = !paused;
+                        gui.trigger_button_highlight(btn);
+                        speaker.trigger_ui_click();
+                    }
+                    ToolbarButton::Reset => {
+                        emu.reset();
+                        gui.trigger_reset_highlight();
+                        speaker.trigger_reset_sound();
+                        // リセット時にブーストを再開
+                        if emu.disk.drives[0].disk.disk_loaded {
+                            boot_boost_active = true;
+                            current_speed = 0; // MAX
+                        }
+                    }
+                    ToolbarButton::Disk1 => {
+                        let disks = get_available_disks(&config.a2rs_home, &config.disk_dir);
+                        let current_filename = emu.disk.drives[0].disk.filename.clone();
+                        gui.open_disk_menu_at_current(0, disks, current_filename);
+                    }
+                    ToolbarButton::Disk2 => {
+                        let disks = get_available_disks(&config.a2rs_home, &config.disk_dir);
+                        let current_filename = emu.disk.drives[1].disk.filename.clone();
+                        gui.open_disk_menu_at_current(1, disks, current_filename);
+                    }
+                    ToolbarButton::SwapDisks => {
+                        emu.disk.swap_disks();
+                        gui.trigger_button_highlight(btn);
+                        speaker.trigger_ui_click();
+                    }
+                    ToolbarButton::QuickSave => {
+                        // セーブディレクトリを作成（実行ファイルからの相対パス）
+                        let save_dir = config.save_dir_path();
+                        let _ = fs::create_dir_all(&save_dir);
+                        let state = emu.save_state();
+                        let filepath = SaveSlots::get_path(&config.a2rs_home, &config.save_dir, current_slot);
+                        if let Ok(json) = serde_json::to_string(&state) {
+                            if let Ok(_) = std::fs::write(&filepath, &json) {
+                                println!("Saved to slot {} ({:?})", current_slot, filepath);
+                                gui.trigger_button_highlight(btn);
+                                speaker.trigger_ui_click();
+                            }
+                        }
+                    }
+                    ToolbarButton::QuickLoad => {
+                        let filepath = SaveSlots::get_path(&config.a2rs_home, &config.save_dir, current_slot);
+                        if let Ok(json) = std::fs::read_to_string(&filepath) {
+                            if let Ok(state) = serde_json::from_str(&json) {
+                                if let Ok(_) = emu.load_state(&state) {
+                                    println!("Loaded from slot {} ({:?})", current_slot, filepath);
+                                    gui.trigger_button_highlight(btn);
+                                    speaker.trigger_ui_click();
+                                }
+                            }
+                        }
+                    }
+                    ToolbarButton::Screenshot => {
+                        // スクリーンショットディレクトリを作成（実行ファイルからの相対パス）
+                        let screenshot_dir = config.screenshot_dir_path();
+                        let _ = fs::create_dir_all(&screenshot_dir);
+                        let filename = screenshot_dir.join(format!("screenshot_{}.png", 
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs()));
+                        let fb = emu.get_framebuffer();
+                        if let Some(filename_str) = filename.to_str() {
+                            if save_screenshot(filename_str, fb, SCREEN_WIDTH, SCREEN_HEIGHT).is_ok() {
+                                println!("Screenshot saved: {}", filename_str);
+                                gui.trigger_button_highlight(btn);
+                                speaker.trigger_ui_click();
+                            }
+                        }
+                    }
+                    ToolbarButton::Fullscreen => {
+                        // 全画面モードは削除（機能無効化）
+                    }
+                }
+            }
+        }
+        
+        // ESCでメニューを閉じる（オーバーレイを開くのはF1）
+        if window.is_key_pressed(Key::Escape, KeyRepeat::No) {
+            if gui.is_disk_menu_open() {
+                gui.close_disk_menu();
+                // キャンセル時はクリック音なし
+            } else if gui.overlay_visible {
+                gui.toggle_overlay();
+                // オーバーレイを閉じる
+            }
+            // それ以外の場合はApple IIにESCキーを送信（key_to_apple2で処理される）
+        }
+        
+        // ディスクメニュー操作
+        if gui.is_disk_menu_open() {
+            if window.is_key_pressed(Key::Up, KeyRepeat::Yes) {
+                gui.disk_menu_up();
+            }
+            if window.is_key_pressed(Key::Down, KeyRepeat::Yes) {
+                gui.disk_menu_down();
+            }
+            if window.is_key_pressed(Key::Enter, KeyRepeat::No) {
+                if let Some((drive, action)) = gui.disk_menu_select() {
+                    speaker.trigger_ui_click();  // 選択決定音
+                    match action {
+                        DiskMenuAction::Eject => {
+                            emu.disk.eject_disk(drive);
+                            println!("Ejected disk from drive {}", drive + 1);
+                        }
+                        DiskMenuAction::InsertDisk(index) => {
+                            if let Some(disk_path) = gui.available_disks.get(index) {
+                                let path = disk_path.clone();
+                                if let Ok(data) = fs::read(&path) {
+                                    let format = if path.to_lowercase().ends_with(".po") {
+                                        disk::DiskFormat::Po
+                                    } else if path.to_lowercase().ends_with(".nib") {
+                                        disk::DiskFormat::Nib
+                                    } else {
+                                        disk::DiskFormat::Dsk
+                                    };
+                                    if emu.disk.insert_disk_with_name(drive, &data, format, Some(path.clone())).is_ok() {
                                         println!("Inserted {} into drive {}", path, drive + 1);
                                     }
                                 }
@@ -1182,55 +1342,95 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
             
             // テキスト入力モード中
             if gui.is_text_input_mode() {
+                let ctrl = window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl);
+                
+                // Ctrl+V でクリップボードからペースト
+                if ctrl && window.is_key_pressed(Key::V, KeyRepeat::No) {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        if let Ok(text) = clipboard.get_text() {
+                            // パス文字のみをフィルタリングして追加
+                            for c in text.chars() {
+                                if c.is_alphanumeric() || c == '/' || c == '\\' || c == ':' 
+                                    || c == '.' || c == '-' || c == '_' || c == ' ' {
+                                    gui.text_input_char(c);
+                                }
+                            }
+                        }
+                    }
+                }
                 // バックスペース
-                if window.is_key_pressed(Key::Backspace, KeyRepeat::Yes) {
+                else if window.is_key_pressed(Key::Backspace, KeyRepeat::Yes) {
                     gui.text_input_backspace();
                 }
                 // Enter で確定
-                if window.is_key_pressed(Key::Enter, KeyRepeat::No) {
+                else if window.is_key_pressed(Key::Enter, KeyRepeat::No) {
                     if let Some((item, value)) = gui.end_text_input() {
                         match item {
-                            5 => config.rom_dir = value,
-                            6 => config.disk_dir = value,
-                            7 => config.screenshot_dir = value,
-                            8 => config.save_dir = value,
+                            3 => config.a2rs_home = value,
+                            4 => config.rom_dir = value,
+                            5 => config.disk_dir = value,
+                            6 => config.screenshot_dir = value,
+                            7 => config.save_dir = value,
                             _ => {}
                         }
                         config.ensure_directories();
-                        let _ = config.save();
+                        let _ = config.save_to(&config_file_path);
                     }
                 }
                 // Escape でキャンセル
-                if window.is_key_pressed(Key::Escape, KeyRepeat::No) {
+                else if window.is_key_pressed(Key::Escape, KeyRepeat::No) {
                     gui.cancel_text_input();
                 }
-                // 文字入力（英数字とパス文字のみ）
-                for key in window.get_keys() {
-                    let ch = match key {
-                        Key::A => Some('a'), Key::B => Some('b'), Key::C => Some('c'),
-                        Key::D => Some('d'), Key::E => Some('e'), Key::F => Some('f'),
-                        Key::G => Some('g'), Key::H => Some('h'), Key::I => Some('i'),
-                        Key::J => Some('j'), Key::K => Some('k'), Key::L => Some('l'),
-                        Key::M => Some('m'), Key::N => Some('n'), Key::O => Some('o'),
-                        Key::P => Some('p'), Key::Q => Some('q'), Key::R => Some('r'),
-                        Key::S => Some('s'), Key::T => Some('t'), Key::U => Some('u'),
-                        Key::V => Some('v'), Key::W => Some('w'), Key::X => Some('x'),
-                        Key::Y => Some('y'), Key::Z => Some('z'),
-                        Key::Key0 => Some('0'), Key::Key1 => Some('1'), Key::Key2 => Some('2'),
-                        Key::Key3 => Some('3'), Key::Key4 => Some('4'), Key::Key5 => Some('5'),
-                        Key::Key6 => Some('6'), Key::Key7 => Some('7'), Key::Key8 => Some('8'),
-                        Key::Key9 => Some('9'),
-                        Key::Minus => Some('-'), Key::Period => Some('.'),
-                        Key::Slash => Some('/'), Key::Backslash => Some('\\'),
-                        _ => None,
-                    };
-                    if let Some(c) = ch {
-                        // 前のフレームで押されていなければ入力
-                        static mut LAST_CHAR: Option<char> = None;
-                        unsafe {
-                            if LAST_CHAR != Some(c) {
-                                gui.text_input_char(c);
-                                LAST_CHAR = Some(c);
+                // 文字入力（Ctrl押下中は無視）
+                else if !ctrl {
+                    for key in window.get_keys() {
+                        let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
+                        let ch = match key {
+                            Key::A => Some(if shift { 'A' } else { 'a' }),
+                            Key::B => Some(if shift { 'B' } else { 'b' }),
+                            Key::C => Some(if shift { 'C' } else { 'c' }),
+                            Key::D => Some(if shift { 'D' } else { 'd' }),
+                            Key::E => Some(if shift { 'E' } else { 'e' }),
+                            Key::F => Some(if shift { 'F' } else { 'f' }),
+                            Key::G => Some(if shift { 'G' } else { 'g' }),
+                            Key::H => Some(if shift { 'H' } else { 'h' }),
+                            Key::I => Some(if shift { 'I' } else { 'i' }),
+                            Key::J => Some(if shift { 'J' } else { 'j' }),
+                            Key::K => Some(if shift { 'K' } else { 'k' }),
+                            Key::L => Some(if shift { 'L' } else { 'l' }),
+                            Key::M => Some(if shift { 'M' } else { 'm' }),
+                            Key::N => Some(if shift { 'N' } else { 'n' }),
+                            Key::O => Some(if shift { 'O' } else { 'o' }),
+                            Key::P => Some(if shift { 'P' } else { 'p' }),
+                            Key::Q => Some(if shift { 'Q' } else { 'q' }),
+                            Key::R => Some(if shift { 'R' } else { 'r' }),
+                            Key::S => Some(if shift { 'S' } else { 's' }),
+                            Key::T => Some(if shift { 'T' } else { 't' }),
+                            Key::U => Some(if shift { 'U' } else { 'u' }),
+                            Key::V => Some(if shift { 'V' } else { 'v' }),
+                            Key::W => Some(if shift { 'W' } else { 'w' }),
+                            Key::X => Some(if shift { 'X' } else { 'x' }),
+                            Key::Y => Some(if shift { 'Y' } else { 'y' }),
+                            Key::Z => Some(if shift { 'Z' } else { 'z' }),
+                            Key::Key0 => Some('0'), Key::Key1 => Some('1'), Key::Key2 => Some('2'),
+                            Key::Key3 => Some('3'), Key::Key4 => Some('4'), Key::Key5 => Some('5'),
+                            Key::Key6 => Some('6'), Key::Key7 => Some('7'), Key::Key8 => Some('8'),
+                            Key::Key9 => Some('9'),
+                            Key::Minus => Some(if shift { '_' } else { '-' }),
+                            Key::Period => Some('.'),
+                            Key::Slash => Some('/'), Key::Backslash => Some('\\'),
+                            Key::Semicolon => Some(if shift { ':' } else { ';' }),
+                            Key::Space => Some(' '),
+                            _ => None,
+                        };
+                        if let Some(c) = ch {
+                            // 前のフレームで押されていなければ入力
+                            static mut LAST_CHAR: Option<char> = None;
+                            unsafe {
+                                if LAST_CHAR != Some(c) {
+                                    gui.text_input_char(c);
+                                    LAST_CHAR = Some(c);
+                                }
                             }
                         }
                     }
@@ -1250,35 +1450,40 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
                             0 => 1, 1 => 2, 2 => 5, 5 => 10, 10 => 0, _ => 1
                         };
                     }
-                    1 => { // Fast Disk
-                        fast_disk_enabled = !fast_disk_enabled;
-                        emu.set_fast_disk(fast_disk_enabled);
-                    }
-                    2 => { // Quality
+                    1 => { // Quality (was Fast Disk, now Quality)
                         quality_level = (quality_level + 1) % 5;
                     }
-                    3 => { // Auto Quality
+                    2 => { // Auto Quality
                         auto_quality = !auto_quality;
                     }
-                    5 => { // ROM Dir
-                        gui.start_text_input(5, &config.rom_dir);
+                    3 => { // A2RS Home
+                        gui.start_text_input(3, &config.a2rs_home);
                     }
-                    6 => { // Disk Dir
-                        gui.start_text_input(6, &config.disk_dir);
+                    4 => { // ROM Dir
+                        gui.start_text_input(4, &config.rom_dir);
                     }
-                    7 => { // Screenshot Dir
-                        gui.start_text_input(7, &config.screenshot_dir);
+                    5 => { // Disk Dir
+                        gui.start_text_input(5, &config.disk_dir);
                     }
-                    8 => { // Save Dir
-                        gui.start_text_input(8, &config.save_dir);
+                    6 => { // Screenshot Dir
+                        gui.start_text_input(6, &config.screenshot_dir);
+                    }
+                    7 => { // Save Dir
+                        gui.start_text_input(7, &config.save_dir);
                     }
                     _ => {}
                 }
             }
         }
         
-        // F1でスピード変更
+        // F1で設定メニュー表示/非表示
         if window.is_key_pressed(Key::F1, KeyRepeat::No) {
+            gui.toggle_overlay();
+            speaker.trigger_ui_click();
+        }
+        
+        // F2でスピード変更
+        if window.is_key_pressed(Key::F2, KeyRepeat::No) {
             current_speed = match current_speed {
                 1 => 2,
                 2 => 5,
@@ -1290,24 +1495,24 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
             println!("Speed: {}", speed_str);
         }
         
-        // F11で全画面
+        // F11でデバッガパネル表示切り替え
         if window.is_key_pressed(Key::F11, KeyRepeat::No) {
-            gui.toggle_fullscreen();
+            debugger_panel.toggle();
+            println!("Debugger panel: {}", if debugger_panel.visible { "ON" } else { "OFF" });
         }
         
         if window.is_key_pressed(Key::F12, KeyRepeat::No) {
-            println!("Reset!");
             emu.reset();
+            gui.trigger_reset_highlight();
+            speaker.trigger_reset_sound();
             profiler.reset();
             debugger.reset();
             profiler.start_boot();
-        }
-        
-        // F2でディスク高速化切り替え
-        if window.is_key_pressed(Key::F2, KeyRepeat::No) {
-            fast_disk_enabled = !fast_disk_enabled;
-            emu.set_fast_disk(fast_disk_enabled);
-            println!("Fast disk: {}", if fast_disk_enabled { "ON" } else { "OFF" });
+            // リセット時にブーストを再開
+            if emu.disk.drives[0].disk.disk_loaded {
+                boot_boost_active = true;
+                current_speed = 0; // MAX
+            }
         }
         
         // F3で品質切り替え（自動/手動）
@@ -1343,19 +1548,10 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
             println!("Auto quality: {}", if auto_quality { "ON" } else { "OFF" });
         }
         
-        // Tab でデバッガパネル表示切り替え
-        if window.is_key_pressed(Key::Tab, KeyRepeat::No) {
-            debugger_panel.toggle();
-            println!("Debugger panel: {}", if debugger_panel.visible { "ON" } else { "OFF" });
-        }
-        
         // デバッガパネルが表示中の場合のキー処理
         if debugger_panel.visible {
-            // 左右でタブ切り替え
-            if window.is_key_pressed(Key::Left, KeyRepeat::No) {
-                debugger_panel.prev_tab();
-            }
-            if window.is_key_pressed(Key::Right, KeyRepeat::No) {
+            // Tabでタブ切り替え（次のタブへ）
+            if window.is_key_pressed(Key::Tab, KeyRepeat::No) {
                 debugger_panel.next_tab();
             }
             
@@ -1403,7 +1599,7 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
             // F8でセーブスロット選択（循環）
             if window.is_key_pressed(Key::F8, KeyRepeat::No) {
                 current_slot = (current_slot + 1) % 10;
-                let exists = SaveSlots::exists(current_slot);
+                let exists = SaveSlots::exists_in(&config.a2rs_home, &config.save_dir, current_slot);
                 println!("Save slot: {} {}", current_slot, if exists { "(has data)" } else { "(empty)" });
             }
         } // デバッガパネル非表示時のif文終了
@@ -1415,7 +1611,7 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
                              Key::Key5, Key::Key6, Key::Key7, Key::Key8, Key::Key9].iter().enumerate() {
                 if window.is_key_pressed(*key, KeyRepeat::No) {
                     current_slot = i as u8;
-                    let exists = SaveSlots::exists(current_slot);
+                    let exists = SaveSlots::exists_in(&config.a2rs_home, &config.save_dir, current_slot);
                     println!("Save slot: {} {}", current_slot, if exists { "(has data)" } else { "(empty)" });
                 }
             }
@@ -1423,13 +1619,15 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
         
         // F5でセーブ（現在のスロットに）
         if window.is_key_pressed(Key::F5, KeyRepeat::No) {
+            let save_dir = config.save_dir_path();
+            let _ = fs::create_dir_all(&save_dir);
             let state = emu.save_state();
-            let filename = SaveSlots::get_filename(current_slot);
+            let filepath = SaveSlots::get_path(&config.a2rs_home, &config.save_dir, current_slot);
             match serde_json::to_string(&state) {
                 Ok(json) => {
-                    match std::fs::write(&filename, &json) {
+                    match std::fs::write(&filepath, &json) {
                         Ok(_) => {
-                            println!("State saved to slot {} ({})", current_slot, filename);
+                            println!("State saved to slot {} ({:?})", current_slot, filepath);
                         }
                         Err(e) => println!("Failed to save state: {}", e),
                     }
@@ -1440,14 +1638,14 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
         
         // F9でロード（現在のスロットから）
         if window.is_key_pressed(Key::F9, KeyRepeat::No) {
-            let filename = SaveSlots::get_filename(current_slot);
-            match std::fs::read_to_string(&filename) {
+            let filepath = SaveSlots::get_path(&config.a2rs_home, &config.save_dir, current_slot);
+            match std::fs::read_to_string(&filepath) {
                 Ok(json) => {
                     match serde_json::from_str(&json) {
                         Ok(state) => {
                             match emu.load_state(&state) {
                                 Ok(_) => {
-                                    println!("State loaded from slot {} ({})", current_slot, filename);
+                                    println!("State loaded from slot {} ({:?})", current_slot, filepath);
                                 }
                                 Err(e) => println!("Failed to load state: {}", e),
                             }
@@ -1461,11 +1659,13 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
         
         // F10でスクリーンショット
         if window.is_key_pressed(Key::F10, KeyRepeat::No) {
-            let filename = format!("screenshot_{}.png", 
+            let screenshot_dir = config.screenshot_dir_path();
+            let _ = fs::create_dir_all(&screenshot_dir);
+            let filename = screenshot_dir.join(format!("screenshot_{}.png", 
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_secs());
+                    .as_secs()));
             
             let fb = emu.get_framebuffer();
             
@@ -1493,7 +1693,7 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
             
             match result {
                 Ok(_) => {
-                    println!("Screenshot saved to {}", filename);
+                    println!("Screenshot saved to {:?}", filename);
                 }
                 Err(e) => println!("Failed to save screenshot: {}", e),
             }
@@ -1504,12 +1704,19 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
         let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
         let ctrl = window.is_key_down(Key::LeftCtrl) || window.is_key_down(Key::RightCtrl);
         
+        // メニューが開いている間はエミュレータへのキー入力をブロック
+        let menu_open = gui.is_disk_menu_open() || gui.overlay_visible;
+        
         // 現在押されているキーを取得
-        let current_keys: Vec<Key> = window.get_keys()
-            .iter()
-            .filter(|k| key_to_apple2(**k, false, false).is_some())
-            .copied()
-            .collect();
+        let current_keys: Vec<Key> = if menu_open {
+            Vec::new()  // メニュー中はキー入力を無視
+        } else {
+            window.get_keys()
+                .iter()
+                .filter(|k| key_to_apple2(**k, false, false).is_some())
+                .copied()
+                .collect()
+        };
         
         // 新しく押されたキーを検出（前フレームには押されていなかったキー）
         for key in &current_keys {
@@ -1526,12 +1733,17 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
         }
         
         // ジョイスティック入力（キーボード + ゲームパッド）
-        let (mut joy_left, mut joy_right, mut joy_up, mut joy_down) = (
-            window.is_key_down(Key::Left),
-            window.is_key_down(Key::Right),
-            window.is_key_down(Key::Up),
-            window.is_key_down(Key::Down),
-        );
+        // メニューが開いている間は矢印キーをブロック
+        let (mut joy_left, mut joy_right, mut joy_up, mut joy_down) = if menu_open {
+            (false, false, false, false)
+        } else {
+            (
+                window.is_key_down(Key::Left),
+                window.is_key_down(Key::Right),
+                window.is_key_down(Key::Up),
+                window.is_key_down(Key::Down),
+            )
+        };
         let (mut button0, mut button1) = (
             window.is_key_down(Key::LeftAlt) || window.is_key_down(Key::Z),
             window.is_key_down(Key::RightAlt) || window.is_key_down(Key::X),
@@ -1653,23 +1865,26 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
             }
             
             // オーディオ処理
-            if sound_enabled && current_speed == 1 {
-                // スピーカークリックを取得
-                let clicks = emu.take_speaker_clicks();
-                for cycle in clicks {
-                    speaker.click(cycle);
+            if sound_enabled {
+                if current_speed == 1 {
+                    // 通常速度時：スピーカークリックを処理
+                    let clicks = emu.take_speaker_clicks();
+                    for cycle in clicks {
+                        speaker.click(cycle);
+                    }
+                } else {
+                    // 高速モード時はスピーカークリックを破棄
+                    emu.take_speaker_clicks();
                 }
                 
-                // サンプルを生成して再生
+                // サンプルを生成して再生（リセット音やUIクリック音は常に処理）
                 let cycles_per_frame = emu.total_cycles - frame_start_cycle;
-                if cycles_per_frame > 0 {
-                    if let Some(ref mut audio) = audio_output {
-                        let samples = speaker.generate_samples(frame_start_cycle, cycles_per_frame);
-                        audio.play_samples(samples);
-                    }
+                if let Some(ref mut audio) = audio_output {
+                    let samples = speaker.generate_samples(frame_start_cycle, cycles_per_frame.max(17030));
+                    audio.play_samples(samples);
                 }
             } else {
-                // 高速モード時はクリックを破棄
+                // サウンド無効時はクリックを破棄
                 emu.take_speaker_clicks();
             }
         }
@@ -1755,6 +1970,10 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
         
         // GUI描画（全画面でない場合）
         if !gui.fullscreen {
+            // ディスクドライブの状態を取得
+            let (_, disk1_reading, disk1_writing) = emu.disk.get_drive_status(0);
+            let (_, disk2_reading, disk2_writing) = emu.disk.get_drive_status(1);
+            
             // エミュレータ状態を構築
             let status = EmulatorStatus {
                 fps: displayed_fps,
@@ -1768,8 +1987,11 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
                 paused,
                 disk1_name: None, // TODO: ディスク名を取得
                 disk2_name: None,
-                disk1_active: emu.disk.motor_on && emu.disk.curr_drive == 0,
-                disk2_active: emu.disk.motor_on && emu.disk.curr_drive == 1,
+                disk1_active: disk1_reading && !disk1_writing,  // 読み込み中（書き込みでない）
+                disk2_active: disk2_reading && !disk2_writing,  // 読み込み中（書き込みでない）
+                disk1_writing,
+                disk2_writing,
+                a2rs_home: config.a2rs_home.clone(),
                 rom_dir: config.rom_dir.clone(),
                 disk_dir: config.disk_dir.clone(),
                 screenshot_dir: config.screenshot_dir.clone(),
@@ -1783,11 +2005,7 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
         // ディスクメニュー描画（オーバーレイとは別）
         if gui.is_disk_menu_open() {
             let drive = gui.disk_menu_drive.unwrap_or(0);
-            let current_disk = if emu.disk.drives[drive].disk.disk_loaded {
-                Some("(loaded)")
-            } else {
-                None
-            };
+            let current_disk = emu.disk.drives[drive].disk.filename.as_deref();
             gui.draw_disk_menu(&mut scaled_buffer, current_window_width, current_window_height, current_disk);
         }
         
@@ -1807,6 +2025,9 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
                 disk2_name: None,
                 disk1_active: false,
                 disk2_active: false,
+                disk1_writing: false,
+                disk2_writing: false,
+                a2rs_home: config.a2rs_home.clone(),
                 rom_dir: config.rom_dir.clone(),
                 disk_dir: config.disk_dir.clone(),
                 screenshot_dir: config.screenshot_dir.clone(),
@@ -1980,13 +2201,14 @@ fn run_with_window(emu: &mut Apple2, speed: u32, init_width: usize, init_height:
         }
     }
 
-    // 設定を保存
+    // 設定を保存（読み込んだファイルに保存）
     config.current_slot = current_slot;
     config.sound_enabled = sound_enabled;
     config.quality_level = quality_level;
     config.auto_quality = auto_quality;
-    config.fast_disk = fast_disk_enabled;
-    if let Err(e) = config.save() {
-        eprintln!("Failed to save config: {}", e);
+    // fast_disk は常にONなので保存しない
+    config.volume = gui.get_volume();
+    if let Err(e) = config.save_to(&config_file_path) {
+        eprintln!("Failed to save config to {:?}: {}", config_file_path, e);
     }
 }
