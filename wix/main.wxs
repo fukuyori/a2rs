@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package
+      Name="A2RS"
+      Manufacturer="A2RS Project"
+      Version="$(var.Version)"
+      UpgradeCode="11111111-2222-3333-4444-555555555555"
+      Language="1033"
+      InstallerVersion="500"
+      Scope="perMachine">
+
+    <SummaryInformation Description="A2RS Apple IIe Emulator Installer" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="a2rs.ico" SourceFile="$(var.ProjectDir)\installer_assets\a2rs.ico" />
+    <Property Id="ARPPRODUCTICON" Value="a2rs.ico" />
+
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.ProjectDir)\installer_assets\LICENSE.rtf" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.ProjectDir)\installer_assets\WixUIBannerBmp.png" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.ProjectDir)\installer_assets\WixUIDialogBmp.png" />
+
+    <ui:WixUI Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="A2RS">
+        <Component Id="cmp_a2rs_exe" Guid="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE">
+          <File Id="fil_a2rs_exe" Source="$(var.SourceDir)\a2rs.exe" KeyPath="yes" />
+        </Component>
+
+        <Component Id="cmp_readme"
+                   Guid="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEE1"
+                   Condition='Installed OR EXISTS("$(var.SourceDir)\README.md")'>
+          <File Id="fil_readme" Source="$(var.SourceDir)\README.md" />
+        </Component>
+
+        <Component Id="cmp_changelog"
+                   Guid="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEE2"
+                   Condition='Installed OR EXISTS("$(var.SourceDir)\CHANGELOG.md")'>
+          <File Id="fil_changelog" Source="$(var.SourceDir)\CHANGELOG.md" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="A2RS" />
+    </StandardDirectory>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="cmp_startmenu_shortcuts" Guid="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEE3">
+        <Shortcut Id="sc_a2rs_startmenu"
+                  Name="A2RS"
+                  Description="Launch A2RS"
+                  Target="[#fil_a2rs_exe]"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="a2rs.ico" />
+        <Shortcut Id="sc_a2rs_uninstall"
+                  Name="Uninstall A2RS"
+                  Description="Uninstall A2RS"
+                  Target="[SystemFolder]msiexec.exe"
+                  Arguments="/x [ProductCode]" />
+        <RemoveFolder Id="rf_application_programs" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\A2RS"
+                       Name="StartMenuShortcutInstalled"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainFeature" Title="A2RS" Level="1">
+      <ComponentRef Id="cmp_a2rs_exe" />
+      <ComponentRef Id="cmp_readme" />
+      <ComponentRef Id="cmp_changelog" />
+      <ComponentRef Id="cmp_startmenu_shortcuts" />
+    </Feature>
+  </Package>
+</Wix>

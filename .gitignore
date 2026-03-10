@@ -1,0 +1,95 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# Cargo / rustup local overrides
+/.cargo/
+rust-toolchain.toml.bak
+
+# IDE / editor
+/.idea/
+/.vscode/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+*.tmp
+*.bak
+*.old
+*.orig
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Test / coverage artifacts
+/coverage/
+*.profraw
+*.profdata
+
+# Generated screenshots / captures
+/screenshots/
+/captures/
+
+# Installer / packaging outputs
+/dist/
+/target/dist/
+/target/inno/
+/target/wix/
+/*.msi
+/*.exe
+/*.zip
+
+# Inno Setup / WiX transient outputs
+*.wixobj
+*.wixpdb
+*.wixlib
+*.wixout
+*.cab
+
+# Local installer assets that may be regenerated
+# (keep tracked files under installer_assets if they are source assets)
+# /installer_assets/generated/
+
+# App runtime config / local state
+/config.json
+/apple2_config.json
+/a2rs_home/
+
+# User-specific ROM / disk images
+*.dsk
+*.do
+*.po
+*.nib
+*.woz
+*.2mg
+*.hdv
+*.bin
+*.rom
+
+# Save states / emulator runtime artifacts
+*.state
+*.sav
+*.screenshot.png
+*.snapshot
+
+# Windows crash dumps / debug leftovers
+*.pdb
+*.ilk
+*.dmp
+
+# Python helpers (if used for tooling)
+/.venv/
+__pycache__/
+*.pyc
+
+# Temporary extraction / packaging folders
+/tmp/
+/temp/
+/release/

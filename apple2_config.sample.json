@@ -1,0 +1,42 @@
+{
+  "a2rs_home": "",
+  "speed": 1,
+  "fast_disk": true,
+  "sound_enabled": true,
+  "volume": 0.5,
+  "quality_level": 4,
+  "auto_quality": true,
+  "window_width": 560,
+  "window_height": 384,
+  "current_slot": 0,
+  "rom_dir": "roms",
+  "disk_dir": "disks",
+  "screenshot_dir": "screenshots",
+  "save_dir": "saves",
+  "gamepad": {
+    "enabled": true,
+    "show_debug_overlay": false,
+    "deadzone": 0.15,
+    "button_a_names": ["South", "C"],
+    "button_b_names": ["East"],
+    "button_x_names": ["West"],
+    "button_y_names": ["North"],
+    "button_lb_names": ["LeftTrigger", "LeftTrigger2"],
+    "button_rb_names": ["RightTrigger", "RightTrigger2"],
+    "button_start_names": ["Start", "Mode"],
+    "button_select_names": ["Select"],
+    "raw_button_a_codes": [289, 297],
+    "raw_button_b_codes": [288, 296],
+    "raw_axis_x_code": 0,
+    "raw_axis_y_code": 1,
+    "raw_hat_x_code": 16,
+    "raw_hat_y_code": 17
+  }
+,
+  "experimental": {
+    "disk_sequencer_mode": "safe",
+    "weak_bits": false,
+    "write_splice": false,
+    "disk_debug_logging": false
+  }
+}
