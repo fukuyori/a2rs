@@ -22,3 +22,4 @@ pub mod profiler;
 
 pub mod rom_resolver;
 pub mod disk_resolver;
+pub mod woz;

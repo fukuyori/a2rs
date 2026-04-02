@@ -29,6 +29,13 @@ pub const DSK_SIZE: usize = TRACKS * BYTES_PER_TRACK; // 143360 bytes
 pub const NIB_TRACK_SIZE: usize = 6656;
 pub const NIB_SIZE: usize = TRACKS * NIB_TRACK_SIZE;
 
+/// WOZ フォーマット用ハーフトラック定数
+/// WOZ TMAP は 160クォータートラック(0〜159)を持つが、
+/// エミュレータのステッパーモーターはハーフトラック単位(phase 0〜79)で動くため
+/// 偶数クォータートラック位置(QT = phase * 2)のみを使う。
+pub const WOZ_HALF_TRACKS: usize = 80;
+pub const WOZ_NIB_SIZE: usize = WOZ_HALF_TRACKS * NIB_TRACK_SIZE;
+
 /// RWTSセクタキャッシュ
 /// 読み取り完了したセクタデータをキャッシュして高速化
 #[derive(Clone)]
@@ -169,6 +176,8 @@ pub enum DiskFormat {
     Nib,
     #[allow(dead_code)]
     Po,
+    /// WOZ 1.0 / 2.0 形式（読み取り専用、NIBに変換済み）
+    Woz,
 }
 
 /// フロッピーディスクの状態
@@ -190,12 +199,20 @@ pub struct FloppyDisk {
     pub modified: bool,
     /// トラック内のバイト位置
     pub byte_position: usize,
-    /// トラック内のニブル数
+    /// トラック内のニブル数（デフォルト = NIB_TRACK_SIZE）
     pub nibbles: usize,
+    /// WOZ: ハーフトラックごとの実ニブル数（回転タイミング再現用）
+    /// None = 全トラック同一（NIB_TRACK_SIZE）
+    pub track_nibble_counts: Option<Vec<usize>>,
     /// トラックイメージがダーティか
     pub track_image_dirty: bool,
     /// トラック開始位置キャッシュ（高速化用）
     pub track_base: usize,
+    /// WOZ: ハーフトラックごとの生ビットストリーム（パック済み、MSB first）
+    /// ビットレベルシーケンサエミュレーション用
+    pub woz_bitstreams: Option<Vec<Vec<u8>>>,
+    /// WOZ: ハーフトラックごとのビット数
+    pub woz_bit_counts: Option<Vec<usize>>,
 }
 
 impl Default for FloppyDisk {
@@ -216,8 +233,11 @@ impl FloppyDisk {
             modified: false,
             byte_position: 0,
             nibbles: NIB_TRACK_SIZE,
+            track_nibble_counts: None,
             track_image_dirty: false,
             track_base: 0,
+            woz_bitstreams: None,
+            woz_bit_counts: None,
         }
     }
 
@@ -232,8 +252,11 @@ impl FloppyDisk {
         self.modified = false;
         self.byte_position = 0;
         self.nibbles = NIB_TRACK_SIZE;
+        self.track_nibble_counts = None;
         self.track_image_dirty = false;
         self.track_base = 0;
+        self.woz_bitstreams = None;
+        self.woz_bit_counts = None;
     }
     
     /// トラックベース位置を更新
@@ -279,6 +302,11 @@ pub struct FloppyDrive {
     pub last_stepper_cycle: u64,
     /// キャッシュされたトラック番号（トラック変更検出用）
     cached_track: usize,
+    /// WOZ ビットレベルシーケンサ: 現在のビット位置（トラック内）
+    pub woz_bit_position: usize,
+    /// WOZ ビットレベルシーケンサ: シフトレジスタ自己同期状態
+    /// OpenEmulator の sequencerState に対応
+    pub woz_sequencer_state: bool,
 }
 
 impl Default for FloppyDrive {
@@ -298,6 +326,8 @@ impl FloppyDrive {
             write_light: 0,
             last_stepper_cycle: 0,
             cached_track: 0,
+            woz_bit_position: 0,
+            woz_sequencer_state: false,
         }
     }
 
@@ -317,12 +347,31 @@ impl FloppyDrive {
     }
     
     /// トラックベースを更新（トラック変更時のみ）
+    ///
+    /// WOZ フォーマット時はハーフトラック(phase)を直接インデックスとして使い、
+    /// コピープロテクトで使われるハーフトラック上のデータを正しく参照する。
     #[inline(always)]
     pub fn update_track_base_if_needed(&mut self) {
-        let track = self.current_track();
-        if track != self.cached_track {
-            self.cached_track = track;
-            self.disk.update_track_base(track);
+        if matches!(self.disk.format, Some(DiskFormat::Woz)) {
+            let half_track = (self.phase as usize).min(WOZ_HALF_TRACKS - 1);
+            if half_track != self.cached_track {
+                self.cached_track = half_track;
+                self.disk.update_track_base(half_track);
+                // WOZ: トラックごとの実ニブル数に更新（回転タイミング再現）
+                if let Some(ref counts) = self.disk.track_nibble_counts {
+                    if half_track < counts.len() && counts[half_track] > 0 {
+                        self.disk.nibbles = counts[half_track];
+                    } else {
+                        self.disk.nibbles = NIB_TRACK_SIZE;
+                    }
+                }
+            }
+        } else {
+            let track = self.current_track();
+            if track != self.cached_track {
+                self.cached_track = track;
+                self.disk.update_track_base(track);
+            }
         }
     }
 }
@@ -394,6 +443,8 @@ pub struct Disk2InterfaceCard {
     pub iwm_mode: bool,
     /// ブートROM
     pub boot_rom: [u8; 256],
+    /// パッチ前のブートROM（WOZ/NIB用にリストア可能）
+    pub original_boot_rom: [u8; 256],
     /// 累積サイクル
     pub cumulative_cycles: u64,
     /// Phase 4: 4 CPU cycles ごとの raw bit 分周器
@@ -561,6 +612,7 @@ impl Disk2InterfaceCard {
             enhance_disk: true,
             iwm_mode: false,
             boot_rom: Self::create_boot_rom(),
+            original_boot_rom: Self::create_boot_rom(),
             cumulative_cycles: 0,
             raw_bit_cycle_accumulator: 0,
             raw_bit_counter: 0,
@@ -662,6 +714,8 @@ impl Disk2InterfaceCard {
             drive.write_light = 0;
             drive.disk.byte_position = 0;
             drive.disk.track_base = 0;
+            drive.woz_bit_position = 0;
+            drive.woz_sequencer_state = false;
         }
     }
     
@@ -789,6 +843,17 @@ impl Disk2InterfaceCard {
                 floppy.dsk_data = None;
                 floppy.format = Some(DiskFormat::Nib);
             }
+            DiskFormat::Woz => {
+                // WOZは事前にNIB変換済みのデータを受け取る（80ハーフトラック分）
+                if data.len() != WOZ_NIB_SIZE {
+                    return Err("Invalid WOZ-converted NIB size");
+                }
+                floppy.data = data.to_vec();
+                floppy.dsk_data = None;
+                floppy.format = Some(DiskFormat::Woz);
+                // WOZフォーマットは書き込み非対応（書き込み保護）
+                floppy.write_protected = true;
+            }
         }
 
         floppy.disk_loaded = true;
@@ -804,6 +869,9 @@ impl Disk2InterfaceCard {
         self.speed_mode = DiskSpeedMode::Accurate;
         self.consecutive_reads = 0;
         self.phase_change_count = 0;
+
+        // WOZ/NIB: コピープロテクトが回転タイミングに依存するため
+        // Strictシーケンサモードへの切り替えを推奨（ensure_woz_sequencer_mode() で適用）
 
         Ok(())
     }
@@ -961,8 +1029,8 @@ impl Disk2InterfaceCard {
             return 1;
         }
 
-        // NIB は物理再現優先のため控えめにする
-        if let Some(DiskFormat::Nib) = self.drives[self.curr_drive].disk.format {
+        // NIB / WOZ は物理再現優先のため控えめにする
+        if matches!(self.drives[self.curr_drive].disk.format, Some(DiskFormat::Nib) | Some(DiskFormat::Woz)) {
             return 2;
         }
 
@@ -994,6 +1062,25 @@ impl Disk2InterfaceCard {
         self.nibble_shift_register = 0;
         self.nibble_byte_ready = false;
         self.sync_bit_window = 0;
+    }
+
+    /// WOZ/NIB ディスクが挿入されている場合、コピープロテクトの回転タイミングを
+    /// 正確に再現するため Strict シーケンサモードに自動切り替えする。
+    /// config ロード後（set_experimental_options 後）に呼ぶこと。
+    pub fn ensure_woz_sequencer_mode(&mut self) {
+        for drive in &self.drives {
+            if matches!(drive.disk.format, Some(DiskFormat::Woz) | Some(DiskFormat::Nib)) {
+                if self.sequencer_mode == DiskSequencerMode::Safe {
+                    self.sequencer_mode = DiskSequencerMode::Strict;
+                    self.nibble_bit_count = 0;
+                    self.nibble_shift_register = 0;
+                    self.nibble_byte_ready = false;
+                    self.sync_bit_window = 0;
+                    log::info!("WOZ/NIB disk detected: auto-enabled Strict sequencer mode");
+                }
+                return;
+            }
+        }
     }
 
     pub fn diagnostics_line(&self) -> String {
@@ -1108,12 +1195,12 @@ impl Disk2InterfaceCard {
             return;
         }
         
-        // NIBフォーマットは常にAccurate（物理構造が本体）
-        if let Some(DiskFormat::Nib) = self.drives[self.curr_drive].disk.format {
+        // NIB / WOZ フォーマットは常にAccurate（物理構造が本体）
+        if matches!(self.drives[self.curr_drive].disk.format, Some(DiskFormat::Nib) | Some(DiskFormat::Woz)) {
             self.speed_mode = DiskSpeedMode::Accurate;
             return;
         }
-        
+
         // PC範囲チェック: RWTS/MLIは複数の位置にある可能性
         let in_rwts_range = (pc >= 0x3D00 && pc < 0x4000)  // DOS 3.3 初期位置
                          || (pc >= 0x9D00 && pc < 0xA000)  // リロケート後
@@ -1219,12 +1306,12 @@ impl Disk2InterfaceCard {
             return;
         }
         
-        // NIBフォーマットは常にAccurate
-        if let Some(DiskFormat::Nib) = self.drives[self.curr_drive].disk.format {
+        // NIB / WOZ フォーマットは常にAccurate
+        if matches!(self.drives[self.curr_drive].disk.format, Some(DiskFormat::Nib) | Some(DiskFormat::Woz)) {
             self.speed_mode = DiskSpeedMode::Accurate;
             return;
         }
-        
+
         // PC範囲チェック: 複数位置対応
         let in_rwts_range = (pc >= 0x3D00 && pc < 0x4000)
                          || (pc >= 0x9D00 && pc < 0xA000)
@@ -1581,6 +1668,59 @@ impl Disk2InterfaceCard {
 
         self.drives[curr_drive].update_track_base_if_needed();
 
+        // ── WOZ ビットレベルシーケンサ (OpenEmulator 互換) ──────────────
+        // WOZ ビットストリームがある場合、実機の Disk II LSS と同じアルゴリズムで
+        // 1ビットずつシフトレジスタに送り込む。
+        if matches!(self.sequencer_mode, DiskSequencerMode::Strict)
+           && self.drives[curr_drive].disk.woz_bitstreams.is_some()
+        {
+            if !self.write_mode || self.iwm_mode {
+                // ── 読み取りモード: READSHIFT ──
+                // 現在のハーフトラックからビットを1つ読む
+                let phase = (self.drives[curr_drive].phase as usize).min(WOZ_HALF_TRACKS - 1);
+                let bit = {
+                    let bitstreams = self.drives[curr_drive].disk.woz_bitstreams.as_ref().unwrap();
+                    let bit_counts = self.drives[curr_drive].disk.woz_bit_counts.as_ref().unwrap();
+                    let bs = &bitstreams[phase];
+                    let bc = bit_counts[phase];
+                    if bs.is_empty() || bc == 0 {
+                        0u8
+                    } else {
+                        let bit_pos = self.drives[curr_drive].woz_bit_position % bc;
+                        let byte_idx = bit_pos >> 3;
+                        let bit_idx = 7 - (bit_pos & 7); // MSB first
+                        self.drives[curr_drive].woz_bit_position = (bit_pos + 1) % bc;
+                        (bs[byte_idx] >> bit_idx) & 1
+                    }
+                };
+
+                // OpenEmulator の Disk II LSS アルゴリズム:
+                // dataRegister (= self.latch) をシフトレジスタとして使う。
+                // bit7=1: LOAD 状態（自己同期待ち）
+                // bit7=0: SHIFT 状態（ビットをシフトイン中）
+                if self.latch & 0x80 != 0 {
+                    // LOAD 状態: 最初の 1-bit を待つ
+                    if !self.drives[curr_drive].woz_sequencer_state {
+                        // まだ最初の 1-bit を見ていない
+                        if bit != 0 {
+                            self.drives[curr_drive].woz_sequencer_state = true;
+                        }
+                    } else {
+                        // 最初の 1-bit の次のビット → 新バイト開始
+                        self.drives[curr_drive].woz_sequencer_state = false;
+                        self.latch = 0x02 | bit;
+                        self.shift_reg = self.latch;
+                    }
+                } else {
+                    // SHIFT 状態: ビットを左シフトして挿入
+                    self.latch = (self.latch << 1) | bit;
+                    self.shift_reg = self.latch;
+                }
+            }
+            return;
+        }
+
+        // ── 従来の NIB ベースパス (Safe / Transitional / Strict without WOZ bits) ──
         let disk_len = self.drives[curr_drive].disk.data.len();
         let byte_pos = self.drives[curr_drive].disk.byte_position;
         let nibbles = self.drives[curr_drive].disk.nibbles;
@@ -1592,8 +1732,6 @@ impl Disk2InterfaceCard {
         }
 
         if !self.write_mode || self.iwm_mode {
-            // Transitional は従来どおり CPU read 時に媒体位置を進める。
-            // Strict は 4 cycles = 1 bit / 8 bits = 1 nibble を tick 側で完全に前進させる。
             let sample = self.drives[curr_drive].disk.data[offset];
             let bit_index = match self.sequencer_mode {
                 DiskSequencerMode::Strict => self.nibble_bit_count.min(7),
@@ -1620,6 +1758,7 @@ impl Disk2InterfaceCard {
                         self.update_sync_window_with_byte(completed_nibble);
                         self.check_sync_marker(curr_drive);
                         self.advance_track_byte_position(curr_drive);
+
 
                         if self.disk_debug_logging {
                             log::debug!(
@@ -2121,23 +2260,12 @@ impl Disk2InterfaceCard {
                 let use_transitional = matches!(self.sequencer_mode, DiskSequencerMode::Transitional);
 
                 if use_strict {
-                    let ready_hit = self.nibble_byte_ready;
-                    self.nibble_byte_ready = false;
+                    // Strict + WOZ ビットレベルシーケンサ:
+                    // tick_disk_bit() でシフトレジスタが常に更新されている。
+                    // CPU読み取りは現在の latch 値をそのまま返す（OpenEmulator と同じ）。
+                    // latch の bit7 が 0 なら BPL ループで待機、1 なら有効バイト。
                     self.shift_reg = self.latch;
                     self.last_read_latch_cycle = self.cumulative_cycles;
-
-                    if self.disk_debug_logging {
-                        log::debug!(
-                            "[DISK][strict] read drive={} track={} cycle={} ready_hit={} latch={:02X} pos={} window={:04X}",
-                            curr_drive + 1,
-                            self.drives[curr_drive].current_track(),
-                            self.cumulative_cycles,
-                            ready_hit,
-                            self.latch,
-                            self.drives[curr_drive].disk.byte_position,
-                            self.sync_bit_window,
-                        );
-                    }
                 } else {
                     let transitional_latch = if use_transitional && self.nibble_byte_ready {
                         self.nibble_byte_ready = false;
@@ -2444,6 +2572,7 @@ impl Disk2InterfaceCard {
             DiskFormat::Dsk => self.export_disk_with_order(drive, &DOS_SECTOR_ORDER),
             DiskFormat::Po => self.export_disk_with_order(drive, &PRODOS_SECTOR_ORDER),
             DiskFormat::Nib => Ok(disk.data.clone()),
+            DiskFormat::Woz => Err("WOZ format is read-only"),
         }
     }
 
@@ -2490,7 +2619,7 @@ impl Disk2InterfaceCard {
         if let Some(ref mut dsk) = self.drives[drive].disk.dsk_data {
             match self.drives[drive].disk.format.unwrap_or(DiskFormat::Dsk) {
                 DiskFormat::Dsk | DiskFormat::Po => *dsk = bytes.clone(),
-                DiskFormat::Nib => {}
+                DiskFormat::Nib | DiskFormat::Woz => {}
             }
         }
         Ok(Some(filename))

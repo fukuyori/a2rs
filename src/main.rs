@@ -32,6 +32,7 @@ use a2rs::profiler;
 use a2rs::disk_log;
 use a2rs::rom_resolver::{self, RomKind};
 use a2rs::disk_resolver;
+use a2rs::woz;
 
 // テスト専用モジュール（main.rsのみ）
 mod test_cpu;
@@ -122,7 +123,7 @@ mod linux_window_drag {
 
 
 
-const DEFAULT_DISK_EXTS: &[&str] = &["dsk", "do", "po"];
+const DEFAULT_DISK_EXTS: &[&str] = &["dsk", "do", "po", "nib", "woz"];
 
 fn draw_linux_gamepad_debug_overlay(buffer: &mut [u32], width: usize, height: usize, lines: &[String]) {
     if lines.is_empty() || width == 0 || height == 0 {
@@ -1137,10 +1138,14 @@ fn main() {
 
     // リセット
     emu.reset();
-    
+
     // ディスク高速化を設定（デフォルトはオン）
     emu.set_fast_disk(true);
-    
+
+    // WOZ/NIBディスクはコピープロテクトのために正確な回転タイミングが必要
+    // Strictシーケンサモードへ自動切り替え
+    emu.disk.ensure_woz_sequencer_mode();
+
     // 起動ブーストログを設定
     if args.boost_log {
         emu.boost_log = true;
@@ -1188,7 +1193,7 @@ fn run_headless(emu: &mut Apple2, cycles: u64) {
     let start = Instant::now();
     emu.run_cycles(cycles);
     let elapsed = start.elapsed();
-    
+
     let mhz = (cycles as f64) / elapsed.as_secs_f64() / 1_000_000.0;
     println!("Executed {} cycles in {:?} ({:.2} MHz effective)", cycles, elapsed, mhz);
     println!("Final PC: ${:04X}", emu.cpu.regs.pc);
@@ -1334,6 +1339,9 @@ fn run_with_window(emu: &mut Apple2, speed_override: Option<u32>, init_width: us
         config.experimental.write_splice,
         config.experimental.disk_debug_logging,
     );
+    // WOZ/NIBディスクはコピープロテクトのために正確な回転タイミングが必要
+    // config適用後にStrictモードへ自動切り替え
+    emu.disk.ensure_woz_sequencer_mode();
 
     // Phase 2: AccurateBoost
     // ディスク回転中は emu.run_frame() の回数を増やし、CPUとディスクを同じ仮想時間軸で前進させる。
@@ -1513,15 +1521,31 @@ fn run_with_window(emu: &mut Apple2, speed_override: Option<u32>, init_width: us
                             if let Some(disk_path) = gui.available_disks.get(index) {
                                 let path = disk_path.clone();
                                 if let Ok(data) = fs::read(&path) {
-                                    let format = if path.to_lowercase().ends_with(".po") {
-                                        disk::DiskFormat::Po
-                                    } else if path.to_lowercase().ends_with(".nib") {
-                                        disk::DiskFormat::Nib
+                                    let path_lower = path.to_lowercase();
+                                    if path_lower.ends_with(".woz") {
+                                        match woz::parse_woz(&data) {
+                                            Ok(result) => {
+                                                if emu.disk.insert_disk_with_name(drive, &result.nib_data, disk::DiskFormat::Woz, Some(path.clone())).is_ok() {
+                                                    emu.disk.drives[drive].disk.track_nibble_counts = Some(result.track_nibble_counts);
+                                                    emu.disk.drives[drive].disk.woz_bitstreams = Some(result.bitstreams);
+                                                    emu.disk.drives[drive].disk.woz_bit_counts = Some(result.bit_counts);
+                                                    emu.disk.ensure_woz_sequencer_mode();
+                                                    println!("Inserted WOZ {} into drive {}", path, drive + 1);
+                                                }
+                                            }
+                                            Err(e) => eprintln!("Failed to parse WOZ {}: {}", path, e),
+                                        }
                                     } else {
-                                        disk::DiskFormat::Dsk
-                                    };
-                                    if emu.disk.insert_disk_with_name(drive, &data, format, Some(path.clone())).is_ok() {
-                                        println!("Inserted {} into drive {}", path, drive + 1);
+                                        let format = if path_lower.ends_with(".po") {
+                                            disk::DiskFormat::Po
+                                        } else if path_lower.ends_with(".nib") {
+                                            disk::DiskFormat::Nib
+                                        } else {
+                                            disk::DiskFormat::Dsk
+                                        };
+                                        if emu.disk.insert_disk_with_name(drive, &data, format, Some(path.clone())).is_ok() {
+                                            println!("Inserted {} into drive {}", path, drive + 1);
+                                        }
                                     }
                                 }
                             }
@@ -1658,15 +1682,31 @@ fn run_with_window(emu: &mut Apple2, speed_override: Option<u32>, init_width: us
                             if let Some(disk_path) = gui.available_disks.get(index) {
                                 let path = disk_path.clone();
                                 if let Ok(data) = fs::read(&path) {
-                                    let format = if path.to_lowercase().ends_with(".po") {
-                                        disk::DiskFormat::Po
-                                    } else if path.to_lowercase().ends_with(".nib") {
-                                        disk::DiskFormat::Nib
+                                    let path_lower = path.to_lowercase();
+                                    if path_lower.ends_with(".woz") {
+                                        match woz::parse_woz(&data) {
+                                            Ok(result) => {
+                                                if emu.disk.insert_disk_with_name(drive, &result.nib_data, disk::DiskFormat::Woz, Some(path.clone())).is_ok() {
+                                                    emu.disk.drives[drive].disk.track_nibble_counts = Some(result.track_nibble_counts);
+                                                    emu.disk.drives[drive].disk.woz_bitstreams = Some(result.bitstreams);
+                                                    emu.disk.drives[drive].disk.woz_bit_counts = Some(result.bit_counts);
+                                                    emu.disk.ensure_woz_sequencer_mode();
+                                                    println!("Inserted WOZ {} into drive {}", path, drive + 1);
+                                                }
+                                            }
+                                            Err(e) => eprintln!("Failed to parse WOZ {}: {}", path, e),
+                                        }
                                     } else {
-                                        disk::DiskFormat::Dsk
-                                    };
-                                    if emu.disk.insert_disk_with_name(drive, &data, format, Some(path.clone())).is_ok() {
-                                        println!("Inserted {} into drive {}", path, drive + 1);
+                                        let format = if path_lower.ends_with(".po") {
+                                            disk::DiskFormat::Po
+                                        } else if path_lower.ends_with(".nib") {
+                                            disk::DiskFormat::Nib
+                                        } else {
+                                            disk::DiskFormat::Dsk
+                                        };
+                                        if emu.disk.insert_disk_with_name(drive, &data, format, Some(path.clone())).is_ok() {
+                                            println!("Inserted {} into drive {}", path, drive + 1);
+                                        }
                                     }
                                 }
                             }

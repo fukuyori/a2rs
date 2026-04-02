@@ -1,6 +1,6 @@
 [package]
 name = "a2rs"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 authors = ["A2RS Project"]
 description = "A2RS - Apple II Emulator written in Rust"
@@ -64,7 +64,7 @@ arboard = "3.2"
 x11rb = { version = "0.13", optional = true }
 
 [features]
-default = ["gamepad", "x11-drag"]
+default = ["gamepad", "audio", "x11-drag"]
 audio = ["rodio"]
 gamepad = ["gilrs"]
 x11-drag = ["x11rb"]

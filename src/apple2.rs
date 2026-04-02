@@ -6,6 +6,7 @@ use crate::cpu::{Cpu, CpuType, MemoryBus};
 use crate::memory::{AppleModel, Memory};
 use crate::video::{Video, VideoFetchPhase, VideoPosition, VideoScanner};
 use crate::disk::{Disk2InterfaceCard, DiskFormat, DiskSequencerMode, DiskControllerState, DSK_SIZE, NIB_SIZE};
+use crate::woz;
 use crate::savestate::{SaveState, CpuState, MemoryState, DiskState, DiskDriveState, VideoState};
 use crate::system::{CYCLES_PER_FRAME as SYSTEM_CYCLES_PER_FRAME, CYCLES_PER_SCANLINE as SYSTEM_CYCLES_PER_SCANLINE};
 
@@ -217,6 +218,7 @@ impl Apple2 {
             // 有効なDisk II ROMかチェック（先頭が$A2 $20で始まる）
             if boot_rom[0] == 0xA2 && boot_rom[1] == 0x20 {
                 self.disk.boot_rom = boot_rom;
+                self.disk.original_boot_rom = boot_rom;
                 log::info!("Loaded Disk II Boot ROM from ROM file");
             }
         }
@@ -237,6 +239,7 @@ impl Apple2 {
             return Err("Invalid Disk II ROM (should start with A2 20)");
         }
         self.disk.boot_rom.copy_from_slice(rom_data);
+        self.disk.original_boot_rom.copy_from_slice(rom_data);
         // メモリの$C600-$C6FFにもコピー（CPUから直接読めるようにする）
         self.memory.copy_disk_boot_rom(rom_data);
         log::info!("Loaded external Disk II Boot ROM");
@@ -273,14 +276,24 @@ impl Apple2 {
         if drive > 1 {
             return Err("Invalid drive number");
         }
-        
+
+        // WOZ形式: マジックバイトで検出してNIBに変換
+        if woz::is_woz(data) {
+            let result = woz::parse_woz(data)?;
+            self.disk.insert_disk(drive, &result.nib_data, DiskFormat::Woz)?;
+            self.disk.drives[drive].disk.track_nibble_counts = Some(result.track_nibble_counts);
+            self.disk.drives[drive].disk.woz_bitstreams = Some(result.bitstreams);
+            self.disk.drives[drive].disk.woz_bit_counts = Some(result.bit_counts);
+            return Ok(());
+        }
+
         // ファイルサイズでフォーマットを判定
         let format = match data.len() {
             DSK_SIZE => DiskFormat::Dsk,  // 143360 bytes
             NIB_SIZE => DiskFormat::Nib,  // 232960 bytes
             _ => return Err("Unknown disk format"),
         };
-        
+
         self.disk.insert_disk(drive, data, format)
     }
 
@@ -308,21 +321,31 @@ impl Apple2 {
             self.memory.main_ram[0x3D] = 0x00;
             // $41: 目標セクター (0)
             self.memory.main_ram[0x41] = 0x00;
-            
-            // P5 PROMの$C652-$C657のSTA命令をNOPに置き換え
-            // これらの命令は$56を格納するが、既に正しい値を設定済み
-            self.disk.boot_rom[0x52] = 0xEA; // NOP
-            self.disk.boot_rom[0x53] = 0xEA; // NOP
-            self.disk.boot_rom[0x54] = 0xEA; // NOP
-            self.disk.boot_rom[0x55] = 0xEA; // NOP
-            self.disk.boot_rom[0x56] = 0xEA; // NOP
-            self.disk.boot_rom[0x57] = 0xEA; // NOP
-            
-            // $C64C: JSR $FCA8 (WAIT) → NOP x 3 (待機は不要)
-            self.disk.boot_rom[0x4C] = 0xEA;
-            self.disk.boot_rom[0x4D] = 0xEA;
-            self.disk.boot_rom[0x4E] = 0xEA;
-            // 注意: HOME ($C621) はパッチしない - 画面初期化に必要
+
+            // WOZ/NIBフォーマットはブートROMを無改変で使う（コピープロテクト互換性）
+            // ブートローダーがROMを$0600にコピーして使うため、パッチするとコピー先も壊れる
+            let is_woz_or_nib = matches!(
+                self.disk.drives[0].disk.format,
+                Some(crate::disk::DiskFormat::Woz) | Some(crate::disk::DiskFormat::Nib)
+            );
+            if is_woz_or_nib {
+                // オリジナルの未パッチROMをリストア
+                self.disk.boot_rom = self.disk.original_boot_rom;
+            } else {
+                // DSK/PO: Safe モード高速化のためパッチ適用
+                // P5 PROMの$C652-$C657のSTA命令をNOPに置き換え
+                self.disk.boot_rom[0x52] = 0xEA; // NOP
+                self.disk.boot_rom[0x53] = 0xEA; // NOP
+                self.disk.boot_rom[0x54] = 0xEA; // NOP
+                self.disk.boot_rom[0x55] = 0xEA; // NOP
+                self.disk.boot_rom[0x56] = 0xEA; // NOP
+                self.disk.boot_rom[0x57] = 0xEA; // NOP
+
+                // $C64C: JSR $FCA8 (WAIT) → NOP x 3 (待機は不要)
+                self.disk.boot_rom[0x4C] = 0xEA;
+                self.disk.boot_rom[0x4D] = 0xEA;
+                self.disk.boot_rom[0x4E] = 0xEA;
+            }
         }
         
         // CPUを一時的に取り出してリセット
