@@ -448,17 +448,19 @@ impl Memory {
                     2 => self.switches.paddle2,
                     _ => self.switches.paddle3,
                 } as u64;
-                
+
                 // パドル値×11サイクル経過するまでHighを返す
                 // Apple IIでは約2.8ms（=2872サイクル）が最大
                 let timeout_cycles = paddle_val * 11;
                 let elapsed = self.paddle_read_cycle.saturating_sub(self.switches.paddle_trigger_cycle);
-                
-                if elapsed < timeout_cycles {
+
+                let result = if elapsed < timeout_cycles {
                     0x80 // まだタイムアウトしていない
                 } else {
                     0x00 // タイムアウト
-                }
+                };
+
+                result
             }
             0x70..=0x7D => {
                 // $C070: パドルトリガー（読み込みでタイマーリセット）

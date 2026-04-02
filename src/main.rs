@@ -2160,16 +2160,21 @@ fn run_with_window(emu: &mut Apple2, speed_override: Option<u32>, init_width: us
         let menu_open = gui.is_disk_menu_open() || gui.overlay_visible;
         
         // 現在押されているキーを取得
+        // 矢印キーはジョイスティック（パドル）専用とし、キーボードストローブには送らない。
+        // ストローブに残った矢印キーコードがゲームのキーボード判定を妨害するため。
         let current_keys: Vec<Key> = if menu_open {
-            Vec::new()  // メニュー中はキー入力を無視
+            Vec::new()
         } else {
             window.get_keys()
                 .iter()
-                .filter(|k| key_to_apple2(**k, false, false).is_some())
+                .filter(|k| {
+                    !matches!(k, Key::Up | Key::Down | Key::Left | Key::Right)
+                        && key_to_apple2(**k, false, false).is_some()
+                })
                 .copied()
                 .collect()
         };
-        
+
         // 新しく押されたキーを検出（前フレームには押されていなかったキー）
         for key in &current_keys {
             if !prev_keys.contains(key) {
@@ -2197,8 +2202,8 @@ fn run_with_window(emu: &mut Apple2, speed_override: Option<u32>, init_width: us
             )
         };
         let (mut button0, mut button1) = (
-            window.is_key_down(Key::LeftAlt) || window.is_key_down(Key::Z),
-            window.is_key_down(Key::RightAlt) || window.is_key_down(Key::X),
+            window.is_key_down(Key::LeftAlt) || window.is_key_down(Key::X),
+            window.is_key_down(Key::RightAlt) || window.is_key_down(Key::Z),
         );
         
         // ゲームパッドからの入力をマージ
@@ -2233,21 +2238,23 @@ fn run_with_window(emu: &mut Apple2, speed_override: Option<u32>, init_width: us
             emu.memory.set_paddle(0, x_value);
         } else {
             // デジタル入力
-            let x_value = if joy_left { 0u8 } else if joy_right { 255u8 } else { 128u8 };
+            // Apple IIジョイスティックの実範囲は約10-245
+            // 左右のみ押している時はY軸を中央に保つ
+            let x_value = if joy_left { 10u8 } else if joy_right { 245u8 } else { 128u8 };
             emu.memory.set_paddle(0, x_value);
         }
-        
+
         if let Some(gy) = gamepad_y {
             let y_value = ((gy + 1.0) * 127.5).clamp(0.0, 255.0) as u8;
             emu.memory.set_paddle(1, y_value);
         } else {
-            let y_value = if joy_up { 0u8 } else if joy_down { 255u8 } else { 128u8 };
+            let y_value = if joy_up { 10u8 } else if joy_down { 245u8 } else { 128u8 };
             emu.memory.set_paddle(1, y_value);
         }
         
         emu.memory.set_button(0, button0);
         emu.memory.set_button(1, button1);
-        
+
         prev_keys = current_keys;
 
         if paused && runtime_single_step_requested {
