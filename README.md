@@ -300,20 +300,21 @@ A2RS reads `config.json` on startup but **never writes GUI changes back to disk*
     "enabled": true,
     "deadzone": 0.15,
     "show_debug_overlay": false,
-    "button_a_names": ["South", "C"],
-    "button_b_names": ["East"],
-    "button_x_names": ["West"],
-    "button_y_names": ["North"],
-    "button_lb_names": ["LeftTrigger", "LeftTrigger2"],
-    "button_rb_names": ["RightTrigger", "RightTrigger2"],
-    "button_start_names": ["Start", "Mode"],
-    "button_select_names": ["Select"],
-    "raw_button_a_codes": [289, 297],
-    "raw_button_b_codes": [288, 296],
-    "raw_axis_x_code": 0,
-    "raw_axis_y_code": 1,
-    "raw_hat_x_code": 16,
-    "raw_hat_y_code": 17
+    "button_0_inputs": ["South", 288],
+    "button_1_inputs": ["East", 289],
+    "profiles": [
+      {
+        "name_contains": "USB,4-Axis,12-Button with POV",
+        "settings": {
+          "button_0_inputs": [288],
+          "button_1_inputs": [289]
+        }
+      }
+    ],
+    "axis_x_code": 0,
+    "axis_y_code": 1,
+    "hat_x_code": 16,
+    "hat_y_code": 17
   },
   "experimental": {
     "disk_sequencer_mode": "safe",
@@ -489,6 +490,46 @@ Cycle with `F8` or select directly with `Ctrl+0`–`Ctrl+9`.
 
 Controls gamepad / joystick input for Apple II paddle emulation.
 
+#### How To Write `config.json`
+
+Use the top-level `gamepad` object for defaults shared by every controller.
+If one specific controller needs different bindings, add a `profiles` entry and override only the fields that differ.
+
+Typical pattern:
+
+1. Put your common bindings in `gamepad.button_0_inputs` and `gamepad.button_1_inputs`
+2. Connect the controller and note the startup log name
+3. Add a `profiles` entry whose `name_contains` matches part of that name
+4. Put only the controller-specific overrides under `settings`
+
+Minimal example:
+
+```json
+{
+  "gamepad": {
+    "button_0_inputs": ["South", 288],
+    "button_1_inputs": ["East", 289],
+    "profiles": [
+      {
+        "name_contains": "USB,4-Axis,12-Button with POV",
+        "settings": {
+          "button_0_inputs": [288],
+          "button_1_inputs": [289]
+        }
+      }
+    ]
+  }
+}
+```
+
+In each `button_*_inputs` array:
+- A string such as `"South"` means a named `gilrs` button
+- An integer such as `288` means a raw button code
+- You can mix both in the same array
+
+When multiple gamepads are connected, A2RS resolves profiles per device name, so different controller types can use different settings at the same time.
+Apple II itself only uses two buttons, so A2RS exposes only `button_0_inputs` and `button_1_inputs`.
+
 #### `enabled`
 **Type:** boolean — **Default:** `true`
 
@@ -510,54 +551,48 @@ Displays a real-time gamepad debug overlay in the top-left corner of the window 
 
 ---
 
-#### `button_a_names` / `button_b_names`
-**Type:** string array — **Defaults:** `["South","C"]` / `["East"]`
+#### `button_0_inputs` / `button_1_inputs`
+**Type:** array of string or integer — **Defaults:** `["South",288]` / `["East",289]`
 
-Named button identifiers (as reported by `gilrs`) mapped to Apple II **Button 0** and **Button 1** respectively.
+Configured inputs mapped to Apple II **Button 0** and **Button 1** respectively. Each entry may be either a named `gilrs` button like `"South"` or a raw evdev button code like `288`.
+The default logical mapping is shared across Windows, macOS, and Linux: `South -> button_0`, `East -> button_1`.
 
 Common gilrs names: `South`, `East`, `North`, `West`, `C`, `Z`, `LeftTrigger`, `RightTrigger`, `Start`, `Select`, `Mode`.
 
 ---
 
-#### `button_x_names` / `button_y_names`
-**Type:** string array — **Defaults:** `["West"]` / `["North"]`
+#### `profiles`
+**Type:** array — **Default:** `[]`
 
-Additional named buttons. Used for secondary functions (not standard Apple II buttons).
+Optional per-controller overrides. Each profile matches when the connected gamepad name contains `name_contains`, and then applies only the fields listed under `settings` on top of the default `gamepad` section.
 
----
+Example:
 
-#### `button_lb_names` / `button_rb_names`
-**Type:** string array — **Defaults:** `["LeftTrigger","LeftTrigger2"]` / `["RightTrigger","RightTrigger2"]`
+```json
+{
+  "name_contains": "USB,4-Axis,12-Button with POV",
+  "settings": {
+    "button_0_inputs": [288],
+    "button_1_inputs": [289]
+  }
+}
+```
 
-Shoulder / trigger buttons.
-
----
-
-#### `button_start_names` / `button_select_names`
-**Type:** string array — **Defaults:** `["Start","Mode"]` / `["Select"]`
-
-Start and Select buttons.
-
----
-
-#### `raw_button_a_codes` / `raw_button_b_codes`
-**Type:** integer array — **Defaults:** `[289,297]` / `[288,296]`
-
-Linux fallback: raw evdev button codes for controllers that appear as `Unknown` in gilrs. Use `show_debug_overlay: true` to find the correct codes for your controller.
+If a gamepad is already connected when A2RS starts, the startup log prints the gamepad name and the applied profile name.
 
 ---
 
-#### `raw_axis_x_code` / `raw_axis_y_code`
+#### `axis_x_code` / `axis_y_code`
 **Type:** integer — **Defaults:** `0` / `1`
 
-Raw evdev axis codes for the left analog stick (Linux fallback).
+evdev axis codes for the left analog stick (Linux fallback).
 
 ---
 
-#### `raw_hat_x_code` / `raw_hat_y_code`
+#### `hat_x_code` / `hat_y_code`
 **Type:** integer — **Defaults:** `16` / `17`
 
-Raw evdev axis codes for the D-pad hat (Linux fallback).
+evdev axis codes for the D-pad hat (Linux fallback).
 
 ---
 

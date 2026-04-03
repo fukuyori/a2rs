@@ -300,20 +300,21 @@ A2RS は起動時に `config.json` を読み込みます。**GUI での変更は
     "enabled": true,
     "deadzone": 0.15,
     "show_debug_overlay": false,
-    "button_a_names": ["South", "C"],
-    "button_b_names": ["East"],
-    "button_x_names": ["West"],
-    "button_y_names": ["North"],
-    "button_lb_names": ["LeftTrigger", "LeftTrigger2"],
-    "button_rb_names": ["RightTrigger", "RightTrigger2"],
-    "button_start_names": ["Start", "Mode"],
-    "button_select_names": ["Select"],
-    "raw_button_a_codes": [289, 297],
-    "raw_button_b_codes": [288, 296],
-    "raw_axis_x_code": 0,
-    "raw_axis_y_code": 1,
-    "raw_hat_x_code": 16,
-    "raw_hat_y_code": 17
+    "button_0_inputs": ["South", 288],
+    "button_1_inputs": ["East", 289],
+    "profiles": [
+      {
+        "name_contains": "USB,4-Axis,12-Button with POV",
+        "settings": {
+          "button_0_inputs": [288],
+          "button_1_inputs": [289]
+        }
+      }
+    ],
+    "axis_x_code": 0,
+    "axis_y_code": 1,
+    "hat_x_code": 16,
+    "hat_y_code": 17
   },
   "experimental": {
     "disk_sequencer_mode": "safe",
@@ -493,6 +494,46 @@ SafeFast ディスク高速化を有効にします。有効時は、DOS 3.3 の
 
 Apple II のパドルエミュレーション用ゲームパッド / ジョイスティック入力の設定です。
 
+#### `config.json` の書き方
+
+共通設定は `gamepad` オブジェクト直下に書きます。
+特定のコントローラーだけ別設定にしたい場合は `profiles` に追加し、違う項目だけを `settings` で上書きします。
+
+基本的な流れ:
+
+1. 共通の割り当てを `gamepad.button_0_inputs` と `gamepad.button_1_inputs` に書く
+2. コントローラーを接続して起動ログに出る名前を確認する
+3. その名前の一部を `name_contains` に書いた `profiles` を追加する
+4. その機種だけ変えたい項目だけを `settings` に書く
+
+最小例:
+
+```json
+{
+  "gamepad": {
+    "button_0_inputs": ["South", 288],
+    "button_1_inputs": ["East", 289],
+    "profiles": [
+      {
+        "name_contains": "USB,4-Axis,12-Button with POV",
+        "settings": {
+          "button_0_inputs": [288],
+          "button_1_inputs": [289]
+        }
+      }
+    ]
+  }
+}
+```
+
+各 `button_*_inputs` 配列では:
+- `"South"` のような文字列は `gilrs` の論理ボタン名です
+- `288` のような整数は raw ボタンコードです
+- 同じ配列に混在して書けます
+
+複数のゲームパッドが同時接続されている場合も、A2RS はデバイス名ごとに `profiles` を解決するため、種類ごとに別設定を適用できます。
+Apple II 自体はボタンを 2 つしか使わないため、A2RS でも `button_0_inputs` と `button_1_inputs` だけを公開します。
+
 #### `enabled`
 **型:** 真偽値 — **デフォルト:** `true`
 
@@ -514,54 +555,48 @@ Apple II のパドルエミュレーション用ゲームパッド / ジョイ�
 
 ---
 
-#### `button_a_names` / `button_b_names`
-**型:** 文字列の配列 — **デフォルト:** `["South","C"]` / `["East"]`
+#### `button_0_inputs` / `button_1_inputs`
+**型:** 文字列または整数の配列 — **デフォルト:** `["South",288]` / `["East",289]`
 
-Apple II の**ボタン 0**（button_a）と**ボタン 1**（button_b）に対応するボタン名（gilrs が報告する名前）です。
+Apple II の**ボタン 0**と**ボタン 1**に対応する入力です。各要素には `gilrs` が報告するボタン名文字列か、生の evdev ボタンコード整数を書けます。
+デフォルトの論理割り当ては Windows / macOS / Linux で共通です: `South -> button_0`, `East -> button_1`。
 
 よく使われる gilrs のボタン名: `South`、`East`、`North`、`West`、`C`、`Z`、`LeftTrigger`、`RightTrigger`、`Start`、`Select`、`Mode`。
 
 ---
 
-#### `button_x_names` / `button_y_names`
-**型:** 文字列の配列 — **デフォルト:** `["West"]` / `["North"]`
+#### `profiles`
+**型:** 配列 — **デフォルト:** `[]`
 
-追加ボタンの名前です（Apple II 標準ボタン以外の機能に使用）。
+コントローラーごとの上書き設定です。接続されたゲームパッド名に `name_contains` が含まれていると、その `settings` に書かれた項目だけがデフォルトの `gamepad` 設定に上書き適用されます。
 
----
+例:
 
-#### `button_lb_names` / `button_rb_names`
-**型:** 文字列の配列 — **デフォルト:** `["LeftTrigger","LeftTrigger2"]` / `["RightTrigger","RightTrigger2"]`
+```json
+{
+  "name_contains": "USB,4-Axis,12-Button with POV",
+  "settings": {
+    "button_0_inputs": [288],
+    "button_1_inputs": [289]
+  }
+}
+```
 
-左右のショルダー / トリガーボタンです。
-
----
-
-#### `button_start_names` / `button_select_names`
-**型:** 文字列の配列 — **デフォルト:** `["Start","Mode"]` / `["Select"]`
-
-スタート・セレクトボタンです。
-
----
-
-#### `raw_button_a_codes` / `raw_button_b_codes`
-**型:** 整数の配列 — **デフォルト:** `[289,297]` / `[288,296]`
-
-Linux フォールバック用の生 evdev ボタンコードです。gilrs で `Unknown` として認識されるコントローラーに使います。コードを調べるには `show_debug_overlay: true` にしてください。
+A2RS 起動時点でゲームパッドが接続されている場合は、起動ログにゲームパッド名と適用したプロファイル名を表示します。
 
 ---
 
-#### `raw_axis_x_code` / `raw_axis_y_code`
+#### `axis_x_code` / `axis_y_code`
 **型:** 整数 — **デフォルト:** `0` / `1`
 
-左アナログスティックの生 evdev 軸コードです（Linux フォールバック）。
+左アナログスティックの evdev 軸コードです（Linux フォールバック）。
 
 ---
 
-#### `raw_hat_x_code` / `raw_hat_y_code`
+#### `hat_x_code` / `hat_y_code`
 **型:** 整数 — **デフォルト:** `16` / `17`
 
-D パッド（ハット）の生 evdev 軸コードです（Linux フォールバック）。
+D パッド（ハット）の evdev 軸コードです（Linux フォールバック）。
 
 ---
 

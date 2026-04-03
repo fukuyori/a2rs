@@ -17,20 +17,21 @@
     "enabled": true,
     "show_debug_overlay": false,
     "deadzone": 0.15,
-    "button_a_names": ["South", "C"],
-    "button_b_names": ["East"],
-    "button_x_names": ["West"],
-    "button_y_names": ["North"],
-    "button_lb_names": ["LeftTrigger", "LeftTrigger2"],
-    "button_rb_names": ["RightTrigger", "RightTrigger2"],
-    "button_start_names": ["Start", "Mode"],
-    "button_select_names": ["Select"],
-    "raw_button_a_codes": [289, 297],
-    "raw_button_b_codes": [288, 296],
-    "raw_axis_x_code": 0,
-    "raw_axis_y_code": 1,
-    "raw_hat_x_code": 16,
-    "raw_hat_y_code": 17
+    "button_0_inputs": ["South", 288],
+    "button_1_inputs": ["East", 289],
+    "profiles": [
+      {
+        "name_contains": "USB,4-Axis,12-Button with POV",
+        "settings": {
+          "button_0_inputs": [288],
+          "button_1_inputs": [289]
+        }
+      }
+    ],
+    "axis_x_code": 0,
+    "axis_y_code": 1,
+    "hat_x_code": 16,
+    "hat_y_code": 17
   }
 ,
   "experimental": {

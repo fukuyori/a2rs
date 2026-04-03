@@ -1,6 +1,6 @@
 [package]
 name = "a2rs"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 authors = ["A2RS Project"]
 description = "A2RS - Apple II Emulator written in Rust"
@@ -115,4 +115,3 @@ upgrade-guid = "E8F2C4A1-9B3D-4E5F-A6C7-8D9E0F1A2B3C"
 path-guid = "A1B2C3D4-E5F6-7890-1234-567890ABCDEF"
 license = false
 eula = false
-

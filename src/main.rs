@@ -1397,7 +1397,15 @@ fn run_with_window(emu: &mut Apple2, speed_override: Option<u32>, init_width: us
     // ゲームパッド初期化
     let mut gamepad_manager = if config.gamepad.enabled {
         match GamepadManager::new(config.gamepad.clone()) {
-            Ok(gp) => Some(gp),
+            Ok(gp) => {
+                if let Some(name) = gp.active_gamepad_name() {
+                    println!("Startup gamepad: {}", name);
+                    if let Some(profile_name) = gp.active_profile_name() {
+                        println!("Startup gamepad profile: {}", profile_name);
+                    }
+                }
+                Some(gp)
+            }
             Err(e) => {
                 log::debug!("Gamepad not available: {}", e);
                 None
@@ -2225,9 +2233,9 @@ fn run_with_window(emu: &mut Apple2, speed_override: Option<u32>, init_width: us
                     gamepad_y = Some(state.left_y);
                 }
                 
-                // ボタン（A/B または X/Y）
-                button0 |= state.button_a || state.button_x;
-                button1 |= state.button_b || state.button_y;
+                // Apple II has two gamepad buttons.
+                button0 |= state.button_a;
+                button1 |= state.button_b;
             }
         }
         

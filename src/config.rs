@@ -219,6 +219,33 @@ impl Default for ExperimentalConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GamepadButtonInput {
+    Name(String),
+    RawCode(u32),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GamepadConfigOverride {
+    pub enabled: Option<bool>,
+    pub deadzone: Option<f32>,
+    pub show_debug_overlay: Option<bool>,
+    pub button_0_inputs: Option<Vec<GamepadButtonInput>>,
+    pub button_1_inputs: Option<Vec<GamepadButtonInput>>,
+    pub axis_x_code: Option<u32>,
+    pub axis_y_code: Option<u32>,
+    pub hat_x_code: Option<u32>,
+    pub hat_y_code: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GamepadProfile {
+    pub name_contains: String,
+    #[serde(default)]
+    pub settings: GamepadConfigOverride,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GamepadConfig {
     #[serde(default = "default_gamepad_enabled")]
     pub enabled: bool,
@@ -226,52 +253,30 @@ pub struct GamepadConfig {
     pub deadzone: f32,
     #[serde(default)]
     pub show_debug_overlay: bool,
-    #[serde(default = "default_button_a_names")]
-    pub button_a_names: Vec<String>,
-    #[serde(default = "default_button_b_names")]
-    pub button_b_names: Vec<String>,
-    #[serde(default = "default_button_x_names")]
-    pub button_x_names: Vec<String>,
-    #[serde(default = "default_button_y_names")]
-    pub button_y_names: Vec<String>,
-    #[serde(default = "default_button_lb_names")]
-    pub button_lb_names: Vec<String>,
-    #[serde(default = "default_button_rb_names")]
-    pub button_rb_names: Vec<String>,
-    #[serde(default = "default_button_start_names")]
-    pub button_start_names: Vec<String>,
-    #[serde(default = "default_button_select_names")]
-    pub button_select_names: Vec<String>,
-    #[serde(default = "default_raw_button_a_codes")]
-    pub raw_button_a_codes: Vec<u32>,
-    #[serde(default = "default_raw_button_b_codes")]
-    pub raw_button_b_codes: Vec<u32>,
-    #[serde(default = "default_raw_axis_x_code")]
-    pub raw_axis_x_code: u32,
-    #[serde(default = "default_raw_axis_y_code")]
-    pub raw_axis_y_code: u32,
-    #[serde(default = "default_raw_hat_x_code")]
-    pub raw_hat_x_code: u32,
-    #[serde(default = "default_raw_hat_y_code")]
-    pub raw_hat_y_code: u32,
+    #[serde(default = "default_button_0_inputs")]
+    pub button_0_inputs: Vec<GamepadButtonInput>,
+    #[serde(default = "default_button_1_inputs")]
+    pub button_1_inputs: Vec<GamepadButtonInput>,
+    #[serde(default = "default_axis_x_code")]
+    pub axis_x_code: u32,
+    #[serde(default = "default_axis_y_code")]
+    pub axis_y_code: u32,
+    #[serde(default = "default_hat_x_code")]
+    pub hat_x_code: u32,
+    #[serde(default = "default_hat_y_code")]
+    pub hat_y_code: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<GamepadProfile>,
 }
 
 fn default_gamepad_enabled() -> bool { true }
 fn default_gamepad_deadzone() -> f32 { 0.15 }
-fn default_button_a_names() -> Vec<String> { vec!["South".into(), "C".into()] }
-fn default_button_b_names() -> Vec<String> { vec!["East".into()] }
-fn default_button_x_names() -> Vec<String> { vec!["West".into()] }
-fn default_button_y_names() -> Vec<String> { vec!["North".into()] }
-fn default_button_lb_names() -> Vec<String> { vec!["LeftTrigger".into(), "LeftTrigger2".into()] }
-fn default_button_rb_names() -> Vec<String> { vec!["RightTrigger".into(), "RightTrigger2".into()] }
-fn default_button_start_names() -> Vec<String> { vec!["Start".into(), "Mode".into()] }
-fn default_button_select_names() -> Vec<String> { vec!["Select".into()] }
-fn default_raw_button_a_codes() -> Vec<u32> { vec![289, 297] }
-fn default_raw_button_b_codes() -> Vec<u32> { vec![288, 296] }
-fn default_raw_axis_x_code() -> u32 { 0 }
-fn default_raw_axis_y_code() -> u32 { 1 }
-fn default_raw_hat_x_code() -> u32 { 16 }
-fn default_raw_hat_y_code() -> u32 { 17 }
+fn default_button_0_inputs() -> Vec<GamepadButtonInput> { vec![GamepadButtonInput::Name("South".into()), GamepadButtonInput::RawCode(288)] }
+fn default_button_1_inputs() -> Vec<GamepadButtonInput> { vec![GamepadButtonInput::Name("East".into()), GamepadButtonInput::RawCode(289)] }
+fn default_axis_x_code() -> u32 { 0 }
+fn default_axis_y_code() -> u32 { 1 }
+fn default_hat_x_code() -> u32 { 16 }
+fn default_hat_y_code() -> u32 { 17 }
 
 impl Default for GamepadConfig {
     fn default() -> Self {
@@ -279,21 +284,72 @@ impl Default for GamepadConfig {
             enabled: default_gamepad_enabled(),
             deadzone: default_gamepad_deadzone(),
             show_debug_overlay: false,
-            button_a_names: default_button_a_names(),
-            button_b_names: default_button_b_names(),
-            button_x_names: default_button_x_names(),
-            button_y_names: default_button_y_names(),
-            button_lb_names: default_button_lb_names(),
-            button_rb_names: default_button_rb_names(),
-            button_start_names: default_button_start_names(),
-            button_select_names: default_button_select_names(),
-            raw_button_a_codes: default_raw_button_a_codes(),
-            raw_button_b_codes: default_raw_button_b_codes(),
-            raw_axis_x_code: default_raw_axis_x_code(),
-            raw_axis_y_code: default_raw_axis_y_code(),
-            raw_hat_x_code: default_raw_hat_x_code(),
-            raw_hat_y_code: default_raw_hat_y_code(),
+            button_0_inputs: default_button_0_inputs(),
+            button_1_inputs: default_button_1_inputs(),
+            axis_x_code: default_axis_x_code(),
+            axis_y_code: default_axis_y_code(),
+            hat_x_code: default_hat_x_code(),
+            hat_y_code: default_hat_y_code(),
+            profiles: Vec::new(),
         }
+    }
+}
+
+impl GamepadConfig {
+    pub fn button_0_inputs_resolved(&self) -> Vec<GamepadButtonInput> {
+        self.button_0_inputs.clone()
+    }
+
+    pub fn button_1_inputs_resolved(&self) -> Vec<GamepadButtonInput> {
+        self.button_1_inputs.clone()
+    }
+
+    fn apply_override(&mut self, override_config: &GamepadConfigOverride) {
+        if let Some(enabled) = override_config.enabled {
+            self.enabled = enabled;
+        }
+        if let Some(deadzone) = override_config.deadzone {
+            self.deadzone = deadzone;
+        }
+        if let Some(show_debug_overlay) = override_config.show_debug_overlay {
+            self.show_debug_overlay = show_debug_overlay;
+        }
+        if let Some(inputs) = &override_config.button_0_inputs {
+            self.button_0_inputs = inputs.clone();
+        }
+        if let Some(inputs) = &override_config.button_1_inputs {
+            self.button_1_inputs = inputs.clone();
+        }
+        if let Some(code) = override_config.axis_x_code {
+            self.axis_x_code = code;
+        }
+        if let Some(code) = override_config.axis_y_code {
+            self.axis_y_code = code;
+        }
+        if let Some(code) = override_config.hat_x_code {
+            self.hat_x_code = code;
+        }
+        if let Some(code) = override_config.hat_y_code {
+            self.hat_y_code = code;
+        }
+    }
+
+    pub fn resolved_for_device_name(&self, device_name: Option<&str>) -> (Self, Option<String>) {
+        let mut resolved = self.clone();
+        resolved.profiles.clear();
+
+        let Some(device_name) = device_name else {
+            return (resolved, None);
+        };
+
+        for profile in &self.profiles {
+            if !profile.name_contains.is_empty() && device_name.contains(&profile.name_contains) {
+                resolved.apply_override(&profile.settings);
+                return (resolved, Some(profile.name_contains.clone()));
+            }
+        }
+
+        (resolved, None)
     }
 }
 
