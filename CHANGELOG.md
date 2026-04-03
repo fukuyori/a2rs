@@ -93,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Optional `gamepad` section in `apple2_config.json` for Windows/Linux button mapping and Linux raw button fallback codes
 - Config flag to show or hide the Linux gamepad debug overlay
+- `--print-gamepad-codes` option to print gamepad button/axis events and raw input codes to standard output
 
 ### Changed
 - Auto quality now drops quickly on low FPS and only restores after sustained high FPS

@@ -133,6 +133,9 @@ a2rs --config /path/to/config.json -1 game.dsk
 
 # Use a custom home directory
 a2rs --home ~/Apple2 -1 dos33.dsk
+
+# Print gamepad input codes to stdout
+a2rs --print-gamepad-codes
 ```
 
 ### Command-Line Options
@@ -148,10 +151,13 @@ a2rs --home ~/Apple2 -1 dos33.dsk
 | `--size <WxH>` | Window size (default: `640x480`) |
 | `-c, --config <FILE>` | Path to configuration file |
 | `--home <PATH>` | A2RS home directory (base for all relative paths) |
+| `--print-gamepad-codes` | Print gamepad button/axis events and raw codes to stdout |
 | `--headless` | Run without GUI |
 | `--cycles <N>` | Number of cycles to run in headless mode |
 | `--profile` | Enable the built-in profiler |
 | `--disk-log <LEVEL>` | Disk log verbosity: `none` \| `flow` \| `state` \| `decide` \| `all` |
+
+`--print-gamepad-codes` starts a probe mode in the main `a2rs` binary and continuously prints button and axis events, including raw codes reported by `gilrs`.
 
 ---
 

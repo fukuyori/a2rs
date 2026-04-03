@@ -380,6 +380,10 @@ struct Args {
     /// A2RSホームディレクトリ（相対パスの基準、設定ファイルより優先）
     #[arg(long)]
     home: Option<String>,
+
+    /// ゲームパッドの入力コードを標準出力して終了待ちする
+    #[arg(long)]
+    print_gamepad_codes: bool,
 }
 
 /// スクリーンショットのファイル名を生成
@@ -888,6 +892,14 @@ fn main() {
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or(log_filter)
     ).init();
+
+    if args.print_gamepad_codes {
+        if let Err(err) = gamepad::run_input_probe() {
+            eprintln!("{}", err);
+            std::process::exit(1);
+        }
+        return;
+    }
     
     // ディスクログレベルを設定
     let disk_log_level = parse_disk_log_level(&args.disk_log);

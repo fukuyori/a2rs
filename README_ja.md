@@ -133,6 +133,9 @@ a2rs --config /path/to/config.json -1 game.dsk
 
 # ホームディレクトリを指定
 a2rs --home ~/Apple2 -1 dos33.dsk
+
+# ゲームパッドの入力コードを標準出力
+a2rs --print-gamepad-codes
 ```
 
 ### コマンドラインオプション
@@ -148,10 +151,13 @@ a2rs --home ~/Apple2 -1 dos33.dsk
 | `--size <WxH>` | ウィンドウサイズ（デフォルト: `640x480`） |
 | `-c, --config <FILE>` | 設定ファイルのパス |
 | `--home <PATH>` | A2RS ホームディレクトリ（相対パスの基準） |
+| `--print-gamepad-codes` | ゲームパッドのボタン/軸イベントと raw code を標準出力 |
 | `--headless` | GUI なしで実行 |
 | `--cycles <N>` | ヘッドレスモードで実行するサイクル数 |
 | `--profile` | 内蔵プロファイラを有効化 |
 | `--disk-log <LEVEL>` | ディスクログ詳細度: `none` \| `flow` \| `state` \| `decide` \| `all` |
+
+`--print-gamepad-codes` を付けると `a2rs` 本体がプローブモードで起動し、`gilrs` が報告するボタン名・軸名・raw code を継続的に標準出力します。
 
 ---
 
