@@ -98,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Auto quality now drops quickly on low FPS and only restores after sustained high FPS
 - Gamepad initialization now respects `gamepad.enabled` and falls back to built-in defaults if the config file is missing
+- Built-in text glyphs now derive from the project's compact UI font instead of the previous ROM-like bitmap set
 
 ## [0.2.0] - 2025-01-07
 
