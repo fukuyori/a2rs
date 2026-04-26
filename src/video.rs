@@ -30,6 +30,26 @@ pub const COLORS: [u32; 16] = [
     0xFFFFFF, // 15: White
 ];
 
+/// AppleWin/Feline-style Double Hi-Res palette in lo-res color order.
+const DHGR_COLORS: [u32; 16] = [
+    0x000000, // 0: Black
+    0xAC124C, // 1: Deep red
+    0x000783, // 2: Dark blue
+    0xAA1AD1, // 3: Magenta
+    0x00832F, // 4: Dark green
+    0x9F977E, // 5: Dark gray
+    0x008AB5, // 6: Blue
+    0x9F9EFF, // 7: Light blue
+    0x7A5F00, // 8: Brown
+    0xFF7247, // 9: Orange
+    0x78687F, // 10: Light gray
+    0xFF7ACF, // 11: Pink
+    0x6FE62C, // 12: Green
+    0xFFF67B, // 13: Yellow
+    0x6CEEB2, // 14: Aqua
+    0xFFFFFF, // 15: White
+];
+
 /// Hi-Resカラー（モノクロ緑）
 pub const HIRES_GREEN: u32 = 0x33FF33;
 #[allow(dead_code)]
@@ -535,23 +555,19 @@ impl Video {
         let base = if memory.switches.page2 { 0x4000 } else { 0x2000 };
         let max_row = if memory.switches.mixed_mode { 160 } else { 192 };
         
-        // Hi-Res color lookup table
-        // NTSC artifact colors based on horizontal pixel position and palette bit
-        // Index: 0=black, 1=purple, 2=green, 3=green, 4=purple,
-        //        5=blue, 6=orange, 7=orange, 8=blue, 9=white
         let hires_colors: [u32; 10] = [
-            COLORS[0],  // 0: Black
-            COLORS[3],  // 1: Purple
-            COLORS[12], // 2: Green
-            COLORS[12], // 3: Green
-            COLORS[3],  // 4: Purple
-            COLORS[6],  // 5: Blue
-            COLORS[9],  // 6: Orange
-            COLORS[9],  // 7: Orange
-            COLORS[6],  // 8: Blue
-            COLORS[15], // 9: White
+            COLORS[0],
+            COLORS[3],
+            COLORS[12],
+            COLORS[12],
+            COLORS[3],
+            0x008AB5,
+            0xFF7247,
+            0xFF7247,
+            0x008AB5,
+            COLORS[15],
         ];
-        
+
         for y in 0..max_row {
             let row_addr = base + Self::hires_row_offset(y);
             
@@ -565,10 +581,9 @@ impl Video {
                     memory.main_ram[(row_addr + x + 1) as usize] 
                 };
                 
-                // last 2 pixels, current 7 pixels, next 2 pixels
-                let run: u16 = ((b0 as u16 & 0x60) >> 5) |
-                              ((b1 as u16 & 0x7f) << 2) |
-                              ((b2 as u16 & 0x03) << 9);
+                let run: u16 = ((b0 as u16 & 0x60) >> 5)
+                    | ((b1 as u16 & 0x7f) << 2)
+                    | ((b2 as u16 & 0x03) << 9);
                 
                 let odd = ((x & 1) << 1) as usize;
                 let offset = ((b1 & 0x80) >> 5) as usize;
@@ -580,20 +595,16 @@ impl Video {
                     
                     let idx = if self.monochrome {
                         if pixel != 0 { 9 } else { 0 }
-                    } else {
-                        if pixel != 0 {
-                            if left != 0 || right != 0 {
-                                9 // white
-                            } else {
-                                offset + odd + (i & 1) + 1
-                            }
+                    } else if pixel != 0 {
+                        if left != 0 || right != 0 {
+                            9
                         } else {
-                            if left != 0 && right != 0 {
-                                offset + odd + 1 - (i & 1) + 1
-                            } else {
-                                0 // black
-                            }
+                            offset + odd + (i & 1) + 1
                         }
+                    } else if left != 0 && right != 0 {
+                        offset + odd + 1 - (i & 1) + 1
+                    } else {
+                        0
                     };
                     
                     let color = if self.monochrome && idx == 9 {
@@ -602,8 +613,8 @@ impl Video {
                         hires_colors[idx]
                     };
                     
-                    let screen_x = (x as usize * 14 + i * 2) as usize;
-                    let screen_y = (y * 2) as usize;
+                    let screen_x = x as usize * 14 + i * 2;
+                    let screen_y = y * 2;
                     
                     if screen_x + 1 < SCREEN_WIDTH && screen_y + 1 < SCREEN_HEIGHT {
                         let fb_idx = screen_y * SCREEN_WIDTH + screen_x;
@@ -727,57 +738,76 @@ impl Video {
         };
         
         let max_row = if memory.switches.mixed_mode { 160 } else { 192 };
-        
+
         for y in 0..max_row {
             let row_addr = base + Self::hires_row_offset(y);
-            
-            // 各行は80バイト（Aux 40バイト + Main 40バイト が交互）
+
+            let mut bits = [0u8; SCREEN_WIDTH + 8];
+            let mut color_mode = [false; SCREEN_WIDTH + 8];
             for byte_x in 0..40 {
-                // Aux RAM のバイト（偶数バイト位置）
                 let aux_byte = memory.aux_ram[(row_addr + byte_x) as usize];
-                // Main RAM のバイト（奇数バイト位置）
                 let main_byte = memory.main_ram[(row_addr + byte_x) as usize];
-                
-                // 2バイト（14ピクセル分、各7ビット）から4ピクセルを抽出
-                // ダブルHi-Resは4ビット/ピクセル
-                // Aux[6:0] + Main[6:0] = 14ビット → 3.5ピクセル(4ビット*3 + 2ビット余り)
-                // 実際は連続する28ビット（4バイト）から7ピクセルを生成
-                
-                // 簡略化: 各バイトの7ビットを14ピクセル分として描画
-                let combined = ((main_byte as u16 & 0x7F) << 7) | (aux_byte as u16 & 0x7F);
-                
-                // 14ピクセル分を処理
-                for bit in 0..14 {
-                    let screen_x = byte_x as usize * 14 + bit;
-                    let screen_y = y * 2;
-                    
-                    // 4ビットカラーを近似的に計算
-                    // 実際のDHIRESは4ビット連続でカラーを決定
-                    let nibble_pos = bit / 4;
-                    let nibble = if nibble_pos == 0 {
-                        aux_byte & 0x0F
-                    } else if nibble_pos == 1 {
-                        ((aux_byte >> 4) & 0x07) | ((main_byte & 0x01) << 3)
-                    } else if nibble_pos == 2 {
-                        (main_byte >> 1) & 0x0F
+
+                let bit_base = byte_x * 14;
+                for bit in 0..7 {
+                    bits[bit_base + bit] = (aux_byte >> bit) & 1;
+                    color_mode[bit_base + bit] = (aux_byte & 0x80) == 0;
+                    bits[bit_base + 7 + bit] = (main_byte >> bit) & 1;
+                    color_mode[bit_base + 7 + bit] = (main_byte & 0x80) == 0;
+                }
+            }
+
+            let screen_y = y * 2;
+            if self.monochrome {
+                for pixel_x in 0..SCREEN_WIDTH {
+                    let color = if bits[pixel_x] != 0 {
+                        self.mono_color
                     } else {
-                        (main_byte >> 5) & 0x07
+                        0x000000
                     };
-                    
-                    // ピクセルがオンかどうか
-                    let pixel_on = ((combined >> bit) & 1) != 0;
-                    
-                    let color = if self.monochrome {
-                        if pixel_on { self.mono_color } else { 0x000000 }
-                    } else {
-                        // DHIRESの16色パレット
-                        COLORS[nibble as usize & 0x0F]
-                    };
-                    
-                    if screen_x < SCREEN_WIDTH && screen_y + 1 < SCREEN_HEIGHT {
-                        let fb_idx = screen_y * SCREEN_WIDTH + screen_x;
+
+                    if screen_y + 1 < SCREEN_HEIGHT {
+                        let fb_idx = screen_y * SCREEN_WIDTH + pixel_x;
                         self.framebuffer[fb_idx] = color;
                         self.framebuffer[fb_idx + SCREEN_WIDTH] = color;
+                    }
+                }
+            } else {
+                for cell_x in 0..(SCREEN_WIDTH / 4) {
+                    let pixel_x = cell_x * 4;
+                    let cell_is_color = color_mode[pixel_x]
+                        && color_mode[pixel_x + 1]
+                        && color_mode[pixel_x + 2]
+                        && color_mode[pixel_x + 3];
+                    if !cell_is_color {
+                        if screen_y + 1 < SCREEN_HEIGHT {
+                            let fb_idx = screen_y * SCREEN_WIDTH + pixel_x;
+                            for dx in 0..4 {
+                                let color = if bits[pixel_x + dx] != 0 {
+                                    0xFFFFFF
+                                } else {
+                                    0x000000
+                                };
+                                self.framebuffer[fb_idx + dx] = color;
+                                self.framebuffer[fb_idx + SCREEN_WIDTH + dx] = color;
+                            }
+                        }
+                        continue;
+                    }
+
+                    let raw = bits[pixel_x]
+                        | (bits[pixel_x + 1] << 1)
+                        | (bits[pixel_x + 2] << 2)
+                        | (bits[pixel_x + 3] << 3);
+                    let color_index = ((raw & 0x07) << 1) | ((raw & 0x08) >> 3);
+                    let color = DHGR_COLORS[color_index as usize];
+
+                    if screen_y + 1 < SCREEN_HEIGHT {
+                        let fb_idx = screen_y * SCREEN_WIDTH + pixel_x;
+                        for dx in 0..4 {
+                            self.framebuffer[fb_idx + dx] = color;
+                            self.framebuffer[fb_idx + SCREEN_WIDTH + dx] = color;
+                        }
                     }
                 }
             }

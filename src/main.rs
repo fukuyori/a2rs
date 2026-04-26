@@ -335,6 +335,10 @@ struct Args {
     /// フルスクリーン風表示（ボーダーレスウィンドウ）
     #[arg(long)]
     fullscreen: bool,
+
+    /// Hi-Res/DHGR をモノクロ表示する
+    #[arg(long)]
+    monochrome: bool,
     
     /// ウィンドウサイズ（幅x高さ、例: 1280x960）
     #[arg(long, default_value = "640x480")]
@@ -1026,6 +1030,9 @@ fn main() {
 
     // エミュレータを作成
     let mut emu = Apple2::new(model);
+    if args.monochrome {
+        emu.video.monochrome = true;
+    }
 
     // Disk II Boot ROMをロード
     let disk_rom_loaded = if let Some(disk_rom_path) = args.disk_rom {

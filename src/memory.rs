@@ -1,5 +1,5 @@
 //! Apple II メモリサブシステム
-//! 
+//!
 //! Apple IIのメモリマップとソフトスイッチを実装
 
 use crate::cpu::MemoryBus;
@@ -24,8 +24,8 @@ pub struct SoftSwitches {
     pub store_80: bool,
     pub col_80: bool,
     pub alt_char: bool,
-    pub dhires: bool,         // ダブルHi-Resモード
-    pub ioudis: bool,         // IOU disable (DHIRESアクセス制御)
+    pub dhires: bool, // ダブルHi-Resモード
+    pub ioudis: bool, // IOU disable (DHIRESアクセス制御)
     pub lc_bank2: bool,
     pub lc_read_enable: bool,
     pub lc_write_enable: bool,
@@ -36,23 +36,23 @@ pub struct SoftSwitches {
     pub speaker_click: bool,
     #[allow(dead_code)]
     pub annunciator: [bool; 4],
-    
+
     // ゲームコントローラ
-    pub button0: bool,        // $C061 - ジョイスティックボタン0 / Open-Apple
-    pub button1: bool,        // $C062 - ジョイスティックボタン1 / Closed-Apple
-    pub button2: bool,        // $C063 - ジョイスティックボタン2
-    pub paddle0: u8,          // $C064 - パドル0 (X軸) 0-255
-    pub paddle1: u8,          // $C065 - パドル1 (Y軸) 0-255
-    pub paddle2: u8,          // $C066 - パドル2
-    pub paddle3: u8,          // $C067 - パドル3
-    pub paddle_trigger_cycle: u64,  // パドルトリガーサイクル
+    pub button0: bool,             // $C061 - ジョイスティックボタン0 / Open-Apple
+    pub button1: bool,             // $C062 - ジョイスティックボタン1 / Closed-Apple
+    pub button2: bool,             // $C063 - ジョイスティックボタン2
+    pub paddle0: u8,               // $C064 - パドル0 (X軸) 0-255
+    pub paddle1: u8,               // $C065 - パドル1 (Y軸) 0-255
+    pub paddle2: u8,               // $C066 - パドル2
+    pub paddle3: u8,               // $C067 - パドル3
+    pub paddle_trigger_cycle: u64, // パドルトリガーサイクル
 }
 
 impl Default for SoftSwitches {
     fn default() -> Self {
         SoftSwitches {
             keyboard_strobe: 0,
-            text_mode: true,      // 起動時はテキストモード
+            text_mode: true, // 起動時はテキストモード
             mixed_mode: false,
             page2: false,
             hires: false,
@@ -60,7 +60,7 @@ impl Default for SoftSwitches {
             col_80: false,
             alt_char: false,
             dhires: false,
-            ioudis: true,         // デフォルトでIOUは有効
+            ioudis: true, // デフォルトでIOUは有効
             lc_bank2: false,
             lc_read_enable: false,
             lc_write_enable: false,
@@ -70,7 +70,7 @@ impl Default for SoftSwitches {
             altzp: false,
             speaker_click: false,
             annunciator: [false; 4],
-            
+
             // ゲームコントローラ（中央位置で初期化）
             button0: false,
             button1: false,
@@ -91,6 +91,8 @@ pub struct Memory {
     pub aux_ram: Box<[u8; 65536]>,
     pub lc_ram: Box<[u8; 16384]>,
     pub lc_ram_bank2: Box<[u8; 4096]>,
+    pub aux_lc_ram: Box<[u8; 16384]>,
+    pub aux_lc_ram_bank2: Box<[u8; 4096]>,
     pub rom: Vec<u8>,
     pub slot_rom: Vec<[u8; 256]>,
     pub model: AppleModel,
@@ -122,6 +124,8 @@ impl Memory {
             aux_ram: Box::new([0; 65536]),
             lc_ram: Box::new([0; 16384]),
             lc_ram_bank2: Box::new([0; 4096]),
+            aux_lc_ram: Box::new([0; 16384]),
+            aux_lc_ram_bank2: Box::new([0; 4096]),
             rom: Vec::new(),
             slot_rom: vec![[0; 256]; 8],
             model,
@@ -166,7 +170,7 @@ impl Memory {
             12288 => {
                 // 12KB ROM: $D000-$FFFF にマッピング
                 self.rom = vec![0xFF; 16384]; // 16KB ($C000-$FFFF)
-                // $D000-$FFFF = オフセット $1000 から
+                                              // $D000-$FFFF = オフセット $1000 から
                 for (i, &byte) in rom_data.iter().enumerate() {
                     self.rom[0x1000 + i] = byte;
                 }
@@ -186,25 +190,25 @@ impl Memory {
                 // メモリマッピング:
                 //   Disk II ROM → $C600-$C6FF
                 //   Monitor ROM → $D000-$FFFF (12KB)
-                
+
                 // 16KB ROMスペースを確保（$C000-$FFFF）
                 self.rom = vec![0xFF; 16384];
-                
+
                 // Disk II P5 Boot ROM ($0600-$06FF) → $C600-$C6FF
                 // ROMオフセット $0600
                 for i in 0..256 {
                     self.rom[0x0600 + i] = rom_data[0x0600 + i];
                 }
-                
+
                 // Autostart Monitor ROM ($2000-$4FFF, 12KB) → $D000-$FFFF
                 // $D000 = ROMオフセット $1000
                 // ファイル$2000 → ROM$1000、ファイル$4FFF → ROM$3FFF
                 for i in 0..12288 {
                     self.rom[0x1000 + i] = rom_data[0x2000 + i];
                 }
-                
+
                 println!("Loaded 20KB Apple II Plus ROM");
-                
+
                 // デバッグ：ベクタを確認
                 let _reset_low = self.rom[0x3FFC];
                 let _reset_high = self.rom[0x3FFD];
@@ -222,18 +226,18 @@ impl Memory {
                 // メモリマッピング:
                 //   メインROM ($4000-$7FFF) → $C000-$FFFF
                 //   Disk II ROM は後半にも含まれている ($4600-$46FF)
-                
+
                 // 後半16KB ($4000-$7FFF) をそのまま使用
                 self.rom = rom_data[0x4000..0x8000].to_vec();
-                
+
                 println!("Loaded 32KB Apple IIe ROM");
-                
+
                 // デバッグ：ベクタを確認
                 let _reset_low = self.rom[0x3FFC];
                 let _reset_high = self.rom[0x3FFD];
                 log::debug!("  Main ROM: $C000-$FFFF (from file offset $4000-$7FFF)");
                 log::debug!("  Reset vector: ${:02X}{:02X}", _reset_high, _reset_low);
-                
+
                 // Disk II Boot ROMが正しい位置にあるか確認
                 // $C600 = ROM offset $0600
                 if self.rom[0x0600] == 0xA2 && self.rom[0x0601] == 0x20 {
@@ -253,7 +257,7 @@ impl Memory {
             }
         }
     }
-    
+
     /// 外部Disk II Boot ROMをメモリ($C600-$C6FF)にコピー
     pub fn copy_disk_boot_rom(&mut self, rom_data: &[u8]) {
         if rom_data.len() == 256 && self.rom.len() > 0x06FF {
@@ -263,7 +267,7 @@ impl Memory {
             log::debug!("[MEMORY] Copied external Disk II Boot ROM to $C600-$C6FF");
         }
     }
-    
+
     /// 文字ROMデータを取得（32KB ROMから）
     #[allow(dead_code)]
     pub fn get_char_rom_from_32k(rom_data: &[u8]) -> Option<Vec<u8>> {
@@ -276,7 +280,40 @@ impl Memory {
     }
 
     pub fn is_iie(&self) -> bool {
-        matches!(self.model, AppleModel::AppleIIe | AppleModel::AppleIIeEnhanced)
+        matches!(
+            self.model,
+            AppleModel::AppleIIe | AppleModel::AppleIIeEnhanced
+        )
+    }
+
+    #[inline]
+    fn store_80_selects_aux(&self, address: u16) -> Option<bool> {
+        if !self.is_iie() || !self.switches.store_80 {
+            return None;
+        }
+
+        match address {
+            0x0400..=0x07FF => Some(self.switches.page2),
+            0x2000..=0x3FFF if self.switches.hires => Some(self.switches.page2),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn read_aux_ram(&self, address: u16) -> bool {
+        self.store_80_selects_aux(address)
+            .unwrap_or(self.is_iie() && self.switches.ramrd)
+    }
+
+    #[inline]
+    fn write_aux_ram(&self, address: u16) -> bool {
+        self.store_80_selects_aux(address)
+            .unwrap_or(self.is_iie() && self.switches.ramwrt)
+    }
+
+    #[inline]
+    fn aux_language_card(&self) -> bool {
+        self.is_iie() && self.switches.altzp
     }
 
     pub fn set_key(&mut self, key: u8) {
@@ -288,7 +325,7 @@ impl Memory {
     pub fn has_key_strobe(&self) -> bool {
         (self.switches.keyboard_strobe & 0x80) != 0
     }
-    
+
     /// ジョイスティックボタンを設定
     pub fn set_button(&mut self, button: usize, pressed: bool) {
         match button {
@@ -298,7 +335,7 @@ impl Memory {
             _ => {}
         }
     }
-    
+
     /// パドル値を設定 (0-255, 128が中央)
     pub fn set_paddle(&mut self, paddle: usize, value: u8) {
         match paddle {
@@ -309,7 +346,7 @@ impl Memory {
             _ => {}
         }
     }
-    
+
     /// ジョイスティック軸を設定 (-1.0 to 1.0 を 0-255 に変換)
     #[allow(dead_code)]
     pub fn set_joystick_axis(&mut self, axis: usize, value: f32) {
@@ -320,7 +357,56 @@ impl Memory {
     fn read_soft_switch(&mut self, address: u16) -> u8 {
         let addr = address & 0xFF;
         match addr {
-            0x00..=0x0F => self.switches.keyboard_strobe,
+            0x00 if self.is_iie() => {
+                self.switches.store_80 = false;
+                self.switches.keyboard_strobe
+            }
+            0x00 => self.switches.keyboard_strobe,
+            0x01 if self.is_iie() => {
+                self.switches.store_80 = true;
+                self.switches.keyboard_strobe
+            }
+            0x02 if self.is_iie() => {
+                self.switches.ramrd = false;
+                self.switches.keyboard_strobe
+            }
+            0x03 if self.is_iie() => {
+                self.switches.ramrd = true;
+                self.switches.keyboard_strobe
+            }
+            0x04 if self.is_iie() => {
+                self.switches.ramwrt = false;
+                self.switches.keyboard_strobe
+            }
+            0x05 if self.is_iie() => {
+                self.switches.ramwrt = true;
+                self.switches.keyboard_strobe
+            }
+            0x08 if self.is_iie() => {
+                self.switches.altzp = false;
+                self.switches.keyboard_strobe
+            }
+            0x09 if self.is_iie() => {
+                self.switches.altzp = true;
+                self.switches.keyboard_strobe
+            }
+            0x0C if self.is_iie() => {
+                self.switches.col_80 = false;
+                self.switches.keyboard_strobe
+            }
+            0x0D if self.is_iie() => {
+                self.switches.col_80 = true;
+                self.switches.keyboard_strobe
+            }
+            0x0E if self.is_iie() => {
+                self.switches.alt_char = false;
+                self.switches.keyboard_strobe
+            }
+            0x0F if self.is_iie() => {
+                self.switches.alt_char = true;
+                self.switches.keyboard_strobe
+            }
+            0x01..=0x0F => self.switches.keyboard_strobe,
             0x10 => {
                 // $C010: ANY KEY DOWN (キーストローブクリア)
                 let result = self.switches.keyboard_strobe;
@@ -329,19 +415,35 @@ impl Memory {
             }
             0x11 if self.is_iie() => {
                 // $C011: RDLCBNK2 - LC Bank2 status
-                if self.switches.lc_bank2 { 0x80 } else { 0x00 }
+                if self.switches.lc_bank2 {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x12 if self.is_iie() => {
                 // $C012: RDLCRAM - LC RAM read enabled
-                if self.switches.lc_read_enable { 0x80 } else { 0x00 }
+                if self.switches.lc_read_enable {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x13 if self.is_iie() => {
                 // $C013: RDRAMRD - Aux RAM read
-                if self.switches.ramrd { 0x80 } else { 0x00 }
+                if self.switches.ramrd {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x14 if self.is_iie() => {
                 // $C014: RDRAMWRT - Aux RAM write
-                if self.switches.ramwrt { 0x80 } else { 0x00 }
+                if self.switches.ramwrt {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x15 if self.is_iie() => {
                 // $C015: RDCXROM - Internal ROM
@@ -349,7 +451,11 @@ impl Memory {
             }
             0x16 if self.is_iie() => {
                 // $C016: RDALTZP - Alt zero page
-                if self.switches.altzp { 0x80 } else { 0x00 }
+                if self.switches.altzp {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x17 if self.is_iie() => {
                 // $C017: RDC3ROM - Slot 3 ROM
@@ -357,7 +463,11 @@ impl Memory {
             }
             0x18 if self.is_iie() => {
                 // $C018: RD80STORE
-                if self.switches.store_80 { 0x80 } else { 0x00 }
+                if self.switches.store_80 {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x19 if self.is_iie() => {
                 // $C019: RDVBL - Vertical blank
@@ -370,27 +480,51 @@ impl Memory {
             }
             0x1A if self.is_iie() => {
                 // $C01A: RDTEXT
-                if self.switches.text_mode { 0x80 } else { 0x00 }
+                if self.switches.text_mode {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x1B if self.is_iie() => {
                 // $C01B: RDMIXED
-                if self.switches.mixed_mode { 0x80 } else { 0x00 }
+                if self.switches.mixed_mode {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x1C if self.is_iie() => {
                 // $C01C: RDPAGE2
-                if self.switches.page2 { 0x80 } else { 0x00 }
+                if self.switches.page2 {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x1D if self.is_iie() => {
                 // $C01D: RDHIRES
-                if self.switches.hires { 0x80 } else { 0x00 }
+                if self.switches.hires {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x1E if self.is_iie() => {
                 // $C01E: RDALTCHAR
-                if self.switches.alt_char { 0x80 } else { 0x00 }
+                if self.switches.alt_char {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x1F if self.is_iie() => {
                 // $C01F: RD80COL
-                if self.switches.col_80 { 0x80 } else { 0x00 }
+                if self.switches.col_80 {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x11..=0x1F => {
                 // Apple II/II+: キーストローブクリア
@@ -399,26 +533,71 @@ impl Memory {
                 result
             }
             0x20..=0x2F => 0x00, // カセットI/O（未実装）
-            0x30..=0x3F => { self.switches.speaker_click = !self.switches.speaker_click; 0x00 }
+            0x30..=0x3F => {
+                self.switches.speaker_click = !self.switches.speaker_click;
+                0x00
+            }
             0x40..=0x4F => 0x00, // ゲームI/O
-            0x50 => { self.switches.text_mode = false; 0x00 }
-            0x51 => { self.switches.text_mode = true; 0x00 }
-            0x52 => { self.switches.mixed_mode = false; 0x00 }
-            0x53 => { self.switches.mixed_mode = true; 0x00 }
-            0x54 => { self.switches.page2 = false; 0x00 }
-            0x55 => { self.switches.page2 = true; 0x00 }
-            0x56 => { self.switches.hires = false; 0x00 }
-            0x57 => { self.switches.hires = true; 0x00 }
+            0x50 => {
+                self.switches.text_mode = false;
+                0x00
+            }
+            0x51 => {
+                self.switches.text_mode = true;
+                0x00
+            }
+            0x52 => {
+                self.switches.mixed_mode = false;
+                0x00
+            }
+            0x53 => {
+                self.switches.mixed_mode = true;
+                0x00
+            }
+            0x54 => {
+                self.switches.page2 = false;
+                0x00
+            }
+            0x55 => {
+                self.switches.page2 = true;
+                0x00
+            }
+            0x56 => {
+                self.switches.hires = false;
+                0x00
+            }
+            0x57 => {
+                self.switches.hires = true;
+                0x00
+            }
             // アヌンシエータ $C058-$C05F
-            0x58 => { self.switches.annunciator[0] = false; 0x00 }
-            0x59 => { self.switches.annunciator[0] = true; 0x00 }
-            0x5A => { self.switches.annunciator[1] = false; 0x00 }
-            0x5B => { self.switches.annunciator[1] = true; 0x00 }
-            0x5C => { self.switches.annunciator[2] = false; 0x00 }
-            0x5D => { self.switches.annunciator[2] = true; 0x00 }
+            0x58 => {
+                self.switches.annunciator[0] = false;
+                0x00
+            }
+            0x59 => {
+                self.switches.annunciator[0] = true;
+                0x00
+            }
+            0x5A => {
+                self.switches.annunciator[1] = false;
+                0x00
+            }
+            0x5B => {
+                self.switches.annunciator[1] = true;
+                0x00
+            }
+            0x5C => {
+                self.switches.annunciator[2] = false;
+                0x00
+            }
+            0x5D => {
+                self.switches.annunciator[2] = true;
+                0x00
+            }
             // $C05E/$C05F: Apple IIeではDHIRES制御
             0x5E => {
-                if self.is_iie() && !self.switches.ioudis {
+                if self.is_iie() && self.switches.ioudis {
                     self.switches.dhires = true;
                 } else {
                     self.switches.annunciator[3] = false;
@@ -426,7 +605,7 @@ impl Memory {
                 0x00
             }
             0x5F => {
-                if self.is_iie() && !self.switches.ioudis {
+                if self.is_iie() && self.switches.ioudis {
                     self.switches.dhires = false;
                 } else {
                     self.switches.annunciator[3] = true;
@@ -435,9 +614,27 @@ impl Memory {
             }
             0x60 => 0x00, // カセットI/O
             // ゲームポート: ボタン
-            0x61 => if self.switches.button0 { 0x80 } else { 0x00 },
-            0x62 => if self.switches.button1 { 0x80 } else { 0x00 },
-            0x63 => if self.switches.button2 { 0x80 } else { 0x00 },
+            0x61 => {
+                if self.switches.button0 {
+                    0x80
+                } else {
+                    0x00
+                }
+            }
+            0x62 => {
+                if self.switches.button1 {
+                    0x80
+                } else {
+                    0x00
+                }
+            }
+            0x63 => {
+                if self.switches.button2 {
+                    0x80
+                } else {
+                    0x00
+                }
+            }
             // ゲームポート: パドル（タイマー方式）
             // $C070でトリガー後、パドル値×11サイクル経過するまでHighを返す
             0x64..=0x67 => {
@@ -452,7 +649,9 @@ impl Memory {
                 // パドル値×11サイクル経過するまでHighを返す
                 // Apple IIでは約2.8ms（=2872サイクル）が最大
                 let timeout_cycles = paddle_val * 11;
-                let elapsed = self.paddle_read_cycle.saturating_sub(self.switches.paddle_trigger_cycle);
+                let elapsed = self
+                    .paddle_read_cycle
+                    .saturating_sub(self.switches.paddle_trigger_cycle);
 
                 let result = if elapsed < timeout_cycles {
                     0x80 // まだタイムアウトしていない
@@ -469,11 +668,19 @@ impl Memory {
             }
             0x7E if self.is_iie() => {
                 // $C07E: IOUDIS - IOU disable status
-                if self.switches.ioudis { 0x80 } else { 0x00 }
+                if self.switches.ioudis {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x7F if self.is_iie() => {
                 // $C07F: DHIRES status
-                if self.switches.dhires { 0x80 } else { 0x00 }
+                if self.switches.dhires {
+                    0x80
+                } else {
+                    0x00
+                }
             }
             0x7E | 0x7F => {
                 // Apple II/II+: パドルトリガー
@@ -515,12 +722,14 @@ impl Memory {
             0x56 => self.switches.hires = false,
             0x57 => self.switches.hires = true,
             // アナンシエーター / DHIRES制御
-            0x5E if self.is_iie() && !self.switches.ioudis => self.switches.dhires = true,
-            0x5F if self.is_iie() && !self.switches.ioudis => self.switches.dhires = false,
+            0x5E if self.is_iie() && self.switches.ioudis => self.switches.dhires = true,
+            0x5F if self.is_iie() && self.switches.ioudis => self.switches.dhires = false,
             // IOUDIS制御
             0x7E if self.is_iie() => self.switches.ioudis = true,
             0x7F if self.is_iie() => self.switches.ioudis = false,
-            0x80..=0x8F => { self.handle_language_card((addr & 0xFF) as u8); }
+            0x80..=0x8F => {
+                self.handle_language_card((addr & 0xFF) as u8);
+            }
             _ => {}
         }
     }
@@ -536,7 +745,9 @@ impl Memory {
             0x1 | 0x5 => {
                 self.switches.lc_bank2 = true;
                 self.switches.lc_read_enable = false;
-                if self.switches.lc_prewrite { self.switches.lc_write_enable = true; }
+                if self.switches.lc_prewrite {
+                    self.switches.lc_write_enable = true;
+                }
                 self.switches.lc_prewrite = !self.switches.lc_prewrite;
             }
             0x2 | 0x6 => {
@@ -548,7 +759,9 @@ impl Memory {
             0x3 | 0x7 => {
                 self.switches.lc_bank2 = true;
                 self.switches.lc_read_enable = true;
-                if self.switches.lc_prewrite { self.switches.lc_write_enable = true; }
+                if self.switches.lc_prewrite {
+                    self.switches.lc_write_enable = true;
+                }
                 self.switches.lc_prewrite = !self.switches.lc_prewrite;
             }
             0x8 | 0xC => {
@@ -560,7 +773,9 @@ impl Memory {
             0x9 | 0xD => {
                 self.switches.lc_bank2 = false;
                 self.switches.lc_read_enable = false;
-                if self.switches.lc_prewrite { self.switches.lc_write_enable = true; }
+                if self.switches.lc_prewrite {
+                    self.switches.lc_write_enable = true;
+                }
                 self.switches.lc_prewrite = !self.switches.lc_prewrite;
             }
             0xA | 0xE => {
@@ -572,7 +787,9 @@ impl Memory {
             0xB | 0xF => {
                 self.switches.lc_bank2 = false;
                 self.switches.lc_read_enable = true;
-                if self.switches.lc_prewrite { self.switches.lc_write_enable = true; }
+                if self.switches.lc_prewrite {
+                    self.switches.lc_write_enable = true;
+                }
                 self.switches.lc_prewrite = !self.switches.lc_prewrite;
             }
             _ => {}
@@ -592,7 +809,7 @@ impl MemoryBus for Memory {
                 }
             }
             0x0200..=0xBFFF => {
-                if self.is_iie() && self.switches.ramrd {
+                if self.read_aux_ram(address) {
                     self.aux_ram[address as usize]
                 } else {
                     self.main_ram[address as usize]
@@ -626,23 +843,45 @@ impl MemoryBus for Memory {
                 // Apple IIcでもApplesoftはROMから読む
                 if self.switches.lc_read_enable {
                     if self.switches.lc_bank2 {
-                        self.lc_ram_bank2[(address - 0xD000) as usize]
+                        if self.aux_language_card() {
+                            self.aux_lc_ram_bank2[(address - 0xD000) as usize]
+                        } else {
+                            self.lc_ram_bank2[(address - 0xD000) as usize]
+                        }
+                    } else if self.aux_language_card() {
+                        self.aux_lc_ram[(address - 0xD000) as usize]
                     } else {
                         self.lc_ram[(address - 0xD000) as usize]
                     }
                 } else if !self.rom.is_empty() {
                     let offset = (address - 0xC000) as usize;
-                    if offset < self.rom.len() { self.rom[offset] } else { 0xFF }
-                } else { 0xFF }
+                    if offset < self.rom.len() {
+                        self.rom[offset]
+                    } else {
+                        0xFF
+                    }
+                } else {
+                    0xFF
+                }
             }
             0xE000..=0xFFFF => {
                 // $E000-$FFFF: Language Card RAM または ROM
                 if self.switches.lc_read_enable {
-                    self.lc_ram[(address - 0xD000) as usize]
+                    if self.aux_language_card() {
+                        self.aux_lc_ram[(address - 0xD000) as usize]
+                    } else {
+                        self.lc_ram[(address - 0xD000) as usize]
+                    }
                 } else if !self.rom.is_empty() {
                     let offset = (address - 0xC000) as usize;
-                    if offset < self.rom.len() { self.rom[offset] } else { 0xFF }
-                } else { 0xFF }
+                    if offset < self.rom.len() {
+                        self.rom[offset]
+                    } else {
+                        0xFF
+                    }
+                } else {
+                    0xFF
+                }
             }
         }
     }
@@ -657,7 +896,7 @@ impl MemoryBus for Memory {
                 }
             }
             0x0200..=0xBFFF => {
-                if self.is_iie() && self.switches.ramwrt {
+                if self.write_aux_ram(address) {
                     self.aux_ram[address as usize] = value;
                 } else {
                     self.main_ram[address as usize] = value;
@@ -669,7 +908,13 @@ impl MemoryBus for Memory {
                 // 通常のLC書き込み判定
                 if self.switches.lc_write_enable {
                     if self.switches.lc_bank2 {
-                        self.lc_ram_bank2[(address - 0xD000) as usize] = value;
+                        if self.aux_language_card() {
+                            self.aux_lc_ram_bank2[(address - 0xD000) as usize] = value;
+                        } else {
+                            self.lc_ram_bank2[(address - 0xD000) as usize] = value;
+                        }
+                    } else if self.aux_language_card() {
+                        self.aux_lc_ram[(address - 0xD000) as usize] = value;
                     } else {
                         self.lc_ram[(address - 0xD000) as usize] = value;
                     }
@@ -677,7 +922,11 @@ impl MemoryBus for Memory {
             }
             0xE000..=0xFFFF => {
                 if self.switches.lc_write_enable {
-                    self.lc_ram[(address - 0xD000) as usize] = value;
+                    if self.aux_language_card() {
+                        self.aux_lc_ram[(address - 0xD000) as usize] = value;
+                    } else {
+                        self.lc_ram[(address - 0xD000) as usize] = value;
+                    }
                 }
             }
         }

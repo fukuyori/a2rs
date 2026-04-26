@@ -1,5 +1,5 @@
 //! Apple II Disk II ドライブエミュレーション
-//! 
+//!
 //! Disk II hardware emulation based on "Beneath Apple DOS" documentation
 //! DSK/NIB形式のディスクイメージをサポート
 //! SafeFast: DOSのRWTSルーチン検出時のみ高速化、怪しい挙動で即Accurateに戻る
@@ -7,13 +7,10 @@
 
 // AppleWin型ログシステム
 use crate::disk_log::{
-    log_motor_on, log_motor_off, log_track_change,
-    log_sync_found, log_fastdisk_disabled,
-    log_fastdisk_enabled_reason, log_fastdisk_disabled_midrun,
-    log_sector_read, log_sector_header, log_fastdisk_read,
-    log_rwts_candidate, log_rwts_outside,
-    log_rwts_session_start, log_rwts_session_end,
-    FastEnableReason, FastDisableReason,
+    log_fastdisk_disabled, log_fastdisk_disabled_midrun, log_fastdisk_enabled_reason,
+    log_fastdisk_read, log_motor_off, log_motor_on, log_rwts_candidate, log_rwts_outside,
+    log_rwts_session_end, log_rwts_session_start, log_sector_header, log_sector_read,
+    log_sync_found, log_track_change, FastDisableReason, FastEnableReason,
 };
 
 use std::collections::HashMap;
@@ -35,6 +32,7 @@ pub const NIB_SIZE: usize = TRACKS * NIB_TRACK_SIZE;
 /// 偶数クォータートラック位置(QT = phase * 2)のみを使う。
 pub const WOZ_HALF_TRACKS: usize = 80;
 pub const WOZ_NIB_SIZE: usize = WOZ_HALF_TRACKS * NIB_TRACK_SIZE;
+const WOZ_CPU_CYCLES_PER_REVOLUTION: u32 = 204_097;
 
 /// RWTSセクタキャッシュ
 /// 読み取り完了したセクタデータをキャッシュして高速化
@@ -65,14 +63,14 @@ impl SectorCache {
             misses: 0,
         }
     }
-    
+
     /// キャッシュをクリア
     pub fn clear(&mut self) {
         self.data.clear();
         self.hits = 0;
         self.misses = 0;
     }
-    
+
     /// セクタをキャッシュに追加
     pub fn insert(&mut self, track: u8, sector: u8, data: &[u8]) {
         if !self.enabled || data.len() != BYTES_PER_SECTOR {
@@ -82,7 +80,7 @@ impl SectorCache {
         buf.copy_from_slice(data);
         self.data.insert((track, sector), buf);
     }
-    
+
     /// キャッシュからセクタを取得
     pub fn get(&mut self, track: u8, sector: u8) -> Option<&[u8; BYTES_PER_SECTOR]> {
         if !self.enabled {
@@ -96,17 +94,17 @@ impl SectorCache {
             None
         }
     }
-    
+
     /// 特定セクタを無効化（書き込み時）
     pub fn invalidate(&mut self, track: u8, sector: u8) {
         self.data.remove(&(track, sector));
     }
-    
+
     /// キャッシュサイズを取得
     pub fn len(&self) -> usize {
         self.data.len()
     }
-    
+
     /// キャッシュが空かどうか
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
@@ -153,14 +151,10 @@ impl Default for DiskSpeedMode {
 
 /// 6-and-2エンコーディングテーブル
 const WRITE_TABLE: [u8; 64] = [
-    0x96, 0x97, 0x9A, 0x9B, 0x9D, 0x9E, 0x9F, 0xA6,
-    0xA7, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB2, 0xB3,
-    0xB4, 0xB5, 0xB6, 0xB7, 0xB9, 0xBA, 0xBB, 0xBC,
-    0xBD, 0xBE, 0xBF, 0xCB, 0xCD, 0xCE, 0xCF, 0xD3,
-    0xD6, 0xD7, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE,
-    0xDF, 0xE5, 0xE6, 0xE7, 0xE9, 0xEA, 0xEB, 0xEC,
-    0xED, 0xEE, 0xEF, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6,
-    0xF7, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF,
+    0x96, 0x97, 0x9A, 0x9B, 0x9D, 0x9E, 0x9F, 0xA6, 0xA7, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB2, 0xB3,
+    0xB4, 0xB5, 0xB6, 0xB7, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xCB, 0xCD, 0xCE, 0xCF, 0xD3,
+    0xD6, 0xD7, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF, 0xE5, 0xE6, 0xE7, 0xE9, 0xEA, 0xEB, 0xEC,
+    0xED, 0xEE, 0xEF, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF,
 ];
 
 /// DOS 3.3セクターインターリーブ
@@ -258,13 +252,13 @@ impl FloppyDisk {
         self.woz_bitstreams = None;
         self.woz_bit_counts = None;
     }
-    
+
     /// トラックベース位置を更新
     #[inline(always)]
     pub fn update_track_base(&mut self, track: usize) {
         self.track_base = track * NIB_TRACK_SIZE;
     }
-    
+
     /// セクタを直接読み取り（Fast Disk用、将来の拡張用）
     /// 成功時は256バイトのセクタデータを返す
     #[inline]
@@ -345,7 +339,7 @@ impl FloppyDrive {
     pub fn half_track_position(&self) -> i32 {
         self.phase.clamp(0, ((TRACKS - 1) * 2) as i32)
     }
-    
+
     /// トラックベースを更新（トラック変更時のみ）
     ///
     /// WOZ フォーマット時はハーフトラック(phase)を直接インデックスとして使い、
@@ -449,6 +443,8 @@ pub struct Disk2InterfaceCard {
     pub cumulative_cycles: u64,
     /// Phase 4: 4 CPU cycles ごとの raw bit 分周器
     pub raw_bit_cycle_accumulator: u8,
+    /// WOZ: track bit_count に基づく分数 raw bit 分周器
+    pub woz_bit_cycle_accumulator: u32,
     /// Phase 4: 回転中に進んだ raw bit 総数
     pub raw_bit_counter: u64,
     /// Phase 6: ニブル読み込み用のビットカウンタ (0..7)
@@ -606,7 +602,7 @@ impl Disk2InterfaceCard {
             write_mode: false,
             load_mode: false,
             seq_func: SequencerFunction::ReadSequencing,
-            shift_reg: 0,
+            shift_reg: 0x80,
             last_cycle: 0,
             last_read_latch_cycle: 0,
             enhance_disk: true,
@@ -615,6 +611,7 @@ impl Disk2InterfaceCard {
             original_boot_rom: Self::create_boot_rom(),
             cumulative_cycles: 0,
             raw_bit_cycle_accumulator: 0,
+            woz_bit_cycle_accumulator: 0,
             raw_bit_counter: 0,
             nibble_bit_count: 0,
             nibble_shift_register: 0,
@@ -671,10 +668,11 @@ impl Disk2InterfaceCard {
         self.write_mode = false;
         self.load_mode = false;
         self.seq_func = SequencerFunction::ReadSequencing;
-        self.shift_reg = 0;
+        self.shift_reg = 0x80;
         self.curr_drive = 0;
         self.cumulative_cycles = 0;
         self.raw_bit_cycle_accumulator = 0;
+        self.woz_bit_cycle_accumulator = 0;
         self.raw_bit_counter = 0;
         self.nibble_bit_count = 0;
         self.nibble_shift_register = 0;
@@ -718,7 +716,7 @@ impl Disk2InterfaceCard {
             drive.woz_sequencer_state = false;
         }
     }
-    
+
     /// ディスク1と2を入れ替え
     pub fn swap_disks(&mut self) {
         self.drives.swap(0, 1);
@@ -729,10 +727,10 @@ impl Disk2InterfaceCard {
     #[allow(dead_code)]
     pub fn update(&mut self, cycles: u64) {
         self.cumulative_cycles = cycles;
-        
+
         // motor-off予約の処理
         self.check_scheduled_motor_off();
-        
+
         // スピニング状態をチェック
         for drive in &mut self.drives {
             if drive.spinning > 0 {
@@ -743,11 +741,11 @@ impl Disk2InterfaceCard {
             }
         }
     }
-    
+
     /// motor-off予約をチェックして実行
     fn check_scheduled_motor_off(&mut self) {
-        if self.motor_off_scheduled_cycle > 0 
-           && self.cumulative_cycles >= self.motor_off_scheduled_cycle 
+        if self.motor_off_scheduled_cycle > 0
+            && self.cumulative_cycles >= self.motor_off_scheduled_cycle
         {
             // 予約時間に達した
             self.motor_off_scheduled_cycle = 0;
@@ -757,58 +755,71 @@ impl Disk2InterfaceCard {
             }
         }
     }
-    
+
     /// motor-offを予約（即座にOFFしない）
     fn schedule_motor_off(&mut self) {
         self.motor_off_scheduled_cycle = self.cumulative_cycles + MOTOR_OFF_DELAY_CYCLES;
     }
-    
+
     /// motor-off予約をキャンセル（RWTS再入時）
     fn cancel_motor_off(&mut self) {
         self.motor_off_scheduled_cycle = 0;
     }
-    
+
     /// ディスクI/O発生を記録（起動ブースト用）
     #[inline]
     fn record_disk_io(&mut self) {
         self.last_disk_io_cycle = self.cumulative_cycles;
         self.disk_io_count += 1;
     }
-    
+
     /// ディスクI/O頻度をチェック（起動ブースト終了判定）
     /// 条件：I/O頻度が低下した（1秒あたりのI/O回数が閾値以下）
     pub fn check_disk_quiet(&mut self) -> bool {
         if self.disk_quiet {
             return true;
         }
-        
+
         // 1秒ごとにI/O頻度を計算
-        let elapsed = self.cumulative_cycles.saturating_sub(self.disk_io_check_cycle);
+        let elapsed = self
+            .cumulative_cycles
+            .saturating_sub(self.disk_io_check_cycle);
         if elapsed >= 1_000_000 {
             // 1秒間のI/O回数
             let io_in_last_second = self.disk_io_count.saturating_sub(self.disk_io_count_prev);
-            
+
             // 閾値以下ならdisk_quiet
             if io_in_last_second < DISK_IO_QUIET_THRESHOLD {
                 self.disk_quiet = true;
                 return true;
             }
-            
+
             // 次の計測期間へ
             self.disk_io_count_prev = self.disk_io_count;
             self.disk_io_check_cycle = self.cumulative_cycles;
         }
-        
+
         false
     }
 
     /// ディスクをロード
-    pub fn insert_disk(&mut self, drive: usize, data: &[u8], format: DiskFormat) -> Result<(), &'static str> {
+    pub fn insert_disk(
+        &mut self,
+        drive: usize,
+        data: &[u8],
+        format: DiskFormat,
+    ) -> Result<(), &'static str> {
         self.insert_disk_with_name(drive, data, format, None)
     }
-    
+
     /// ファイル名付きでディスクを挿入
-    pub fn insert_disk_with_name(&mut self, drive: usize, data: &[u8], format: DiskFormat, filename: Option<String>) -> Result<(), &'static str> {
+    pub fn insert_disk_with_name(
+        &mut self,
+        drive: usize,
+        data: &[u8],
+        format: DiskFormat,
+        filename: Option<String>,
+    ) -> Result<(), &'static str> {
         if drive > 1 {
             return Err("Invalid drive number");
         }
@@ -875,7 +886,7 @@ impl Disk2InterfaceCard {
 
         Ok(())
     }
-    
+
     /// セクタ順序を変換
     fn reorder_sectors(data: &[u8], sector_order: &[usize; 16]) -> Vec<u8> {
         let mut result = vec![0u8; DSK_SIZE];
@@ -900,7 +911,7 @@ impl Disk2InterfaceCard {
 
     /// Disk IIブートROMを作成（16セクター版 P5A）
     /// デフォルトブートROMを作成（未ロード状態）
-    /// 
+    ///
     /// 実際のDisk II Boot ROMはAppleの著作物であり、外部ファイルから
     /// ロードする必要があります。ROMがロードされていない場合は、
     /// 仮想ブートROM（VBR）モードで起動を試みます。
@@ -909,7 +920,7 @@ impl Disk2InterfaceCard {
         // 最初のバイトが0x00（LDA #$20ではない）の場合、VBRモードとして検出
         [0u8; 256]
     }
-    
+
     /// 外部ファイルからブートROMをロード
     pub fn load_boot_rom(&mut self, data: &[u8]) -> Result<(), &'static str> {
         if data.len() != 256 {
@@ -922,7 +933,7 @@ impl Disk2InterfaceCard {
         self.boot_rom.copy_from_slice(data);
         Ok(())
     }
-    
+
     /// ROMがロードされているかチェック
     pub fn is_rom_loaded(&self) -> bool {
         // Disk II ROMは 0xA2 0x20 (LDX #$20) で始まる
@@ -939,13 +950,13 @@ impl Disk2InterfaceCard {
         // Q6: $C0xC (Q6L) / $C0xD (Q6H)
         // Q7: $C0xE (Q7L) / $C0xF (Q7H)
         match address & 0x03 {
-            0x00 => self.q6 = false,  // Q6L
-            0x01 => self.q6 = true,   // Q6H
-            0x02 => self.q7 = false,  // Q7L
-            0x03 => self.q7 = true,   // Q7H
+            0x00 => self.q6 = false, // Q6L
+            0x01 => self.q6 = true,  // Q6H
+            0x02 => self.q7 = false, // Q7L
+            0x03 => self.q7 = true,  // Q7H
             _ => {}
         }
-        
+
         // write_mode = Q7, load_mode = Q6
         self.write_mode = self.q7;
         self.load_mode = self.q6;
@@ -996,7 +1007,7 @@ impl Disk2InterfaceCard {
     // 核心: 「ON条件」より「OFF条件」を多く・早く・確実に
     // ラッチ方式: 一度危険検知したら自動では戻さない
     // ========================================
-    
+
     /// SafeFast: 実効的な高速化が有効か
     /// enhance_disk（ユーザー設定）AND NOT fastdisk_latched_off
     #[inline]
@@ -1030,7 +1041,10 @@ impl Disk2InterfaceCard {
         }
 
         // NIB / WOZ は物理再現優先のため控えめにする
-        if matches!(self.drives[self.curr_drive].disk.format, Some(DiskFormat::Nib) | Some(DiskFormat::Woz)) {
+        if matches!(
+            self.drives[self.curr_drive].disk.format,
+            Some(DiskFormat::Nib) | Some(DiskFormat::Woz)
+        ) {
             return 2;
         }
 
@@ -1046,7 +1060,7 @@ impl Disk2InterfaceCard {
             }
         }
     }
-    
+
     pub fn set_experimental_options(
         &mut self,
         sequencer_mode: DiskSequencerMode,
@@ -1061,6 +1075,7 @@ impl Disk2InterfaceCard {
         self.nibble_bit_count = 0;
         self.nibble_shift_register = 0;
         self.nibble_byte_ready = false;
+        self.shift_reg = 0x80;
         self.sync_bit_window = 0;
     }
 
@@ -1069,12 +1084,16 @@ impl Disk2InterfaceCard {
     /// config ロード後（set_experimental_options 後）に呼ぶこと。
     pub fn ensure_woz_sequencer_mode(&mut self) {
         for drive in &self.drives {
-            if matches!(drive.disk.format, Some(DiskFormat::Woz) | Some(DiskFormat::Nib)) {
+            if matches!(
+                drive.disk.format,
+                Some(DiskFormat::Woz) | Some(DiskFormat::Nib)
+            ) {
                 if self.sequencer_mode == DiskSequencerMode::Safe {
                     self.sequencer_mode = DiskSequencerMode::Strict;
                     self.nibble_bit_count = 0;
                     self.nibble_shift_register = 0;
                     self.nibble_byte_ready = false;
+                    self.shift_reg = 0x80;
                     self.sync_bit_window = 0;
                     log::info!("WOZ/NIB disk detected: auto-enabled Strict sequencer mode");
                 }
@@ -1107,7 +1126,8 @@ impl Disk2InterfaceCard {
 
     #[inline]
     pub fn motor_off_delay_remaining_cycles(&self) -> u64 {
-        self.motor_off_scheduled_cycle.saturating_sub(self.cumulative_cycles)
+        self.motor_off_scheduled_cycle
+            .saturating_sub(self.cumulative_cycles)
     }
 
     pub fn realism_lines(&self) -> Vec<String> {
@@ -1138,9 +1158,21 @@ impl Disk2InterfaceCard {
         ));
 
         for (idx, drive) in self.drives.iter().enumerate() {
-            let loaded = if drive.disk.disk_loaded { "loaded" } else { "empty" };
-            let ro = if drive.disk.write_protected { "RO" } else { "RW" };
-            let dirty = if drive.disk.modified || drive.disk.track_image_dirty { "dirty" } else { "clean" };
+            let loaded = if drive.disk.disk_loaded {
+                "loaded"
+            } else {
+                "empty"
+            };
+            let ro = if drive.disk.write_protected {
+                "RO"
+            } else {
+                "RW"
+            };
+            let dirty = if drive.disk.modified || drive.disk.track_image_dirty {
+                "dirty"
+            } else {
+                "clean"
+            };
             let active = if idx == self.curr_drive { "*" } else { " " };
             let half_track = drive.phase / 2;
             let half_step = (drive.phase & 1) != 0;
@@ -1194,9 +1226,12 @@ impl Disk2InterfaceCard {
         if self.fastdisk_latched_off || !self.enhance_disk {
             return;
         }
-        
+
         // NIB / WOZ フォーマットは常にAccurate（物理構造が本体）
-        if matches!(self.drives[self.curr_drive].disk.format, Some(DiskFormat::Nib) | Some(DiskFormat::Woz)) {
+        if matches!(
+            self.drives[self.curr_drive].disk.format,
+            Some(DiskFormat::Nib) | Some(DiskFormat::Woz)
+        ) {
             self.speed_mode = DiskSpeedMode::Accurate;
             return;
         }
@@ -1205,7 +1240,7 @@ impl Disk2InterfaceCard {
         let in_rwts_range = (pc >= 0x3D00 && pc < 0x4000)  // DOS 3.3 初期位置
                          || (pc >= 0x9D00 && pc < 0xA000)  // リロケート後
                          || (pc >= 0xB700 && pc < 0xC000); // 最終位置
-        
+
         // RWTSセッション管理
         match self.rwts_session {
             RwtsSession::Inactive => {
@@ -1242,10 +1277,10 @@ impl Disk2InterfaceCard {
             RwtsSession::Active { start_cycle, .. } => {
                 // セッション中：継続または終了を判定
                 let _session_cycles = self.cumulative_cycles.saturating_sub(start_cycle);
-                
+
                 // モーター状態の判定（予約中はON扱い）
                 let motor_effectively_on = self.motor_on || self.motor_off_scheduled_cycle > 0;
-                
+
                 // AppleWin互換：セッション継続を最優先
                 // motor OFFが確定するまでセッションを維持
                 if !motor_effectively_on {
@@ -1259,16 +1294,18 @@ impl Disk2InterfaceCard {
             }
         }
     }
-    
+
     /// RWTSセッション開始
     fn start_rwts_session(&mut self, pc: u16) {
         // RWTS再入検知：前回セッション終了から短時間なら motor-off 予約をキャンセル
-        let gap = self.cumulative_cycles.saturating_sub(self.last_rwts_end_cycle);
+        let gap = self
+            .cumulative_cycles
+            .saturating_sub(self.last_rwts_end_cycle);
         if gap < RWTS_GAP_THRESHOLD && self.motor_off_scheduled_cycle > 0 {
             self.cancel_motor_off();
             // motor は ON のまま維持
         }
-        
+
         self.rwts_session = RwtsSession::Active {
             start_pc: pc,
             start_cycle: self.cumulative_cycles,
@@ -1278,45 +1315,48 @@ impl Disk2InterfaceCard {
         self.try_enable_fastdisk(FastEnableReason::RwtsDetected);
         self.consecutive_reads = 0;
         self.phase_change_count = 0;
-        
+
         // DECIDEログ
         log_rwts_session_start(pc);
     }
-    
+
     /// RWTSセッション終了
     fn end_rwts_session(&mut self, reason: &str) {
         if let RwtsSession::Active { .. } = self.rwts_session {
             // DECIDEログ
             log_rwts_session_end(reason, self.session_sector_count);
-            
+
             // 最終セッション終了サイクルを記録（RWTS再入検知用）
             self.last_rwts_end_cycle = self.cumulative_cycles;
-            
+
             self.rwts_session = RwtsSession::Inactive;
             self.fast_enabled = false;
             self.speed_mode = DiskSpeedMode::Accurate;
             self.session_sector_count = 0;
         }
     }
-    
+
     /// SafeFast: 旧API互換（メモリなしバージョン）
     #[allow(dead_code)]
     pub fn observe_pc(&mut self, pc: u16) {
         if self.fastdisk_latched_off || !self.enhance_disk {
             return;
         }
-        
+
         // NIB / WOZ フォーマットは常にAccurate
-        if matches!(self.drives[self.curr_drive].disk.format, Some(DiskFormat::Nib) | Some(DiskFormat::Woz)) {
+        if matches!(
+            self.drives[self.curr_drive].disk.format,
+            Some(DiskFormat::Nib) | Some(DiskFormat::Woz)
+        ) {
             self.speed_mode = DiskSpeedMode::Accurate;
             return;
         }
 
         // PC範囲チェック: 複数位置対応
         let in_rwts_range = (pc >= 0x3D00 && pc < 0x4000)
-                         || (pc >= 0x9D00 && pc < 0xA000)
-                         || (pc >= 0xB700 && pc < 0xC000);
-        
+            || (pc >= 0x9D00 && pc < 0xA000)
+            || (pc >= 0xB700 && pc < 0xC000);
+
         match self.speed_mode {
             DiskSpeedMode::Accurate => {
                 if in_rwts_range && self.motor_on {
@@ -1348,7 +1388,7 @@ impl Disk2InterfaceCard {
             }
         }
     }
-    
+
     /// SafeFast: DOS 3.3 IOB（I/O Control Block）の妥当性チェック
     /// IOBは通常$B7E8付近にある
     /// レイアウト:
@@ -1365,7 +1405,7 @@ impl Disk2InterfaceCard {
         const IOB_ADDR: usize = 0xB7E8;
         self.check_iob_at(memory, IOB_ADDR)
     }
-    
+
     /// SafeFast: 初期DOSのIOBチェック（$3E00付近）
     #[allow(dead_code)]
     fn looks_like_early_dos_iob(&self, memory: &[u8]) -> bool {
@@ -1378,14 +1418,14 @@ impl Disk2InterfaceCard {
         }
         false
     }
-    
+
     /// 指定アドレスのIOB妥当性チェック
     #[allow(dead_code)]
     fn check_iob_at(&self, memory: &[u8], iob_addr: usize) -> bool {
         if memory.len() <= iob_addr + 8 {
             return false;
         }
-        
+
         let op_code = memory[iob_addr];
         let slot = memory[iob_addr + 1];
         let drive = memory[iob_addr + 2];
@@ -1393,29 +1433,29 @@ impl Disk2InterfaceCard {
         let sector = memory[iob_addr + 5];
         let buf_lo = memory[iob_addr + 6];
         let buf_hi = memory[iob_addr + 7];
-        
+
         // 操作コード: 1=READ, 2=WRITE
         let valid_op = op_code == 1 || op_code == 2;
-        
+
         // スロット: $60 = slot 6 (Disk II標準)
         let valid_slot = slot == 0x60;
-        
+
         // ドライブ: 1 or 2
         let valid_drive = drive == 1 || drive == 2;
-        
+
         // トラック: 0-34
         let valid_track = track <= 34;
-        
+
         // セクター: 0-15
         let valid_sector = sector <= 15;
-        
+
         // バッファ: RAM領域 ($0000-$BFFF)
         let buf_addr = (buf_hi as u16) << 8 | buf_lo as u16;
         let valid_buffer = buf_addr < 0xC000;
-        
+
         valid_op && valid_slot && valid_drive && valid_track && valid_sector && valid_buffer
     }
-    
+
     /// SafeFast: 怪しい挙動を検出したらラッチOFF
     /// OFF条件を多く・早く・確実に
     fn detect_suspicious_behavior(&mut self) {
@@ -1424,28 +1464,30 @@ impl Disk2InterfaceCard {
         if matches!(self.rwts_session, RwtsSession::Active { .. }) {
             return;
         }
-        
+
         // ① 半トラック検出（コピーガードの王道）
         let current_phase = self.drives[self.curr_drive].phase;
         if current_phase % 2 != 0 {
             self.latch_off("half-track position detected");
             return;
         }
-        
+
         // ② 同一トラックでの異常な連続読み取り（セクタ数を大幅に超える）
         // 16セクタ × 約400ニブル/セクタ ≒ 6400、余裕を見て上限設定
         if self.consecutive_reads > MAX_CONSECUTIVE_READS {
             self.latch_off("excessive nibble reads on same track");
             return;
         }
-        
+
         // ③ 短時間での異常なフェーズ変化（回転位相測定の兆候）
-        let cycle_diff = self.cumulative_cycles.saturating_sub(self.last_phase_change_cycle);
+        let cycle_diff = self
+            .cumulative_cycles
+            .saturating_sub(self.last_phase_change_cycle);
         if self.phase_change_count > RAPID_PHASE_THRESHOLD && cycle_diff < RAPID_PHASE_CYCLES {
             self.latch_off("rapid phase changes (timing check?)");
             return;
         }
-        
+
         // ④ トラック番号が異常（非DOS）
         let track = self.drives[self.curr_drive].current_track();
         if track > 34 {
@@ -1453,7 +1495,7 @@ impl Disk2InterfaceCard {
             return;
         }
     }
-    
+
     fn remember_fastdisk_disable_reason(&mut self, reason: impl Into<String>) {
         self.last_fastdisk_disable_reason = Some(reason.into());
     }
@@ -1481,7 +1523,7 @@ impl Disk2InterfaceCard {
             self.latch_off_reason(FastDisableReason::WriteOperation);
         }
     }
-    
+
     /// SafeFast: ラッチOFF（自動では戻さない）- 文字列版（後方互換）
     /// 解除条件: ディスク交換、Cold Reset のみ
     fn latch_off(&mut self, reason: &str) {
@@ -1492,7 +1534,7 @@ impl Disk2InterfaceCard {
         if self.fast_enabled {
             log_fastdisk_disabled(reason);
         }
-        
+
         // RWTSセッションも終了
         self.rwts_session = RwtsSession::Inactive;
         self.fastdisk_latched_off = true;
@@ -1502,7 +1544,7 @@ impl Disk2InterfaceCard {
         self.phase_change_count = 0;
         self.consecutive_latch_reads = 0;
     }
-    
+
     /// SafeFast: ラッチOFF（理由コード版）
     /// コピーガード級の理由では永続的にラッチOFF（セッションも強制終了）
     /// WRITE_OPとUNKNOWN_PATTERNはセッション中は完全に無視
@@ -1514,8 +1556,7 @@ impl Disk2InterfaceCard {
             match reason {
                 // セッション中は軽微な異常を完全に無視（ログも出さない）
                 // AppleWin互換：RWTS中のWRITE/UNKNOWNは正常な動作
-                FastDisableReason::WriteOperation | 
-                FastDisableReason::UnknownPattern => {
+                FastDisableReason::WriteOperation | FastDisableReason::UnknownPattern => {
                     return; // FastDiskを維持してセッション継続
                 }
                 // コピーガード級はセッションを強制終了
@@ -1525,17 +1566,16 @@ impl Disk2InterfaceCard {
                 }
             }
         }
-        
+
         // DECIDEログ: FastDisk無効化の判断
         if self.fast_enabled {
             log_fastdisk_disabled_midrun(reason);
         }
-        
+
         // 一時的disable vs 永続的ラッチOFFの判断
         match reason {
             // 一時的disable: 次のREAD RWTSで再有効化可能
-            FastDisableReason::WriteOperation | 
-            FastDisableReason::UnknownPattern => {
+            FastDisableReason::WriteOperation | FastDisableReason::UnknownPattern => {
                 log::warn!("FastDisk disabled temporarily: {}", reason);
                 self.fast_enabled = false;
                 self.speed_mode = DiskSpeedMode::Accurate;
@@ -1556,7 +1596,7 @@ impl Disk2InterfaceCard {
             }
         }
     }
-    
+
     /// SafeFast: FastDisk有効化を試みる（条件を満たした場合のみ）
     fn try_enable_fastdisk(&mut self, reason: FastEnableReason) {
         // 既に有効なら何もしない（二重ログ防止）
@@ -1576,15 +1616,15 @@ impl Disk2InterfaceCard {
         if !self.enhance_disk {
             return;
         }
-        
+
         self.fast_enabled = true;
         self.speed_mode = DiskSpeedMode::Fast;
         self.clear_fastdisk_disable_reason();
-        
+
         // DECIDEログ: FastDisk有効化の判断
         log_fastdisk_enabled_reason(reason);
     }
-    
+
     /// SafeFast: 連続ラッチアクセス観測（タイミング観測検出）
     /// コピープロテクトはディスク回転位相を計測するため、
     /// 極端に短いサイクル間隔での連続ラッチアクセスを行う
@@ -1594,30 +1634,28 @@ impl Disk2InterfaceCard {
         if matches!(self.rwts_session, RwtsSession::Active { .. }) {
             return;
         }
-        
+
         let delta = self.cumulative_cycles.saturating_sub(self.last_latch_cycle);
         self.last_latch_cycle = self.cumulative_cycles;
-        
+
         // 4サイクル以内の連続アクセスをカウント
         if delta <= 4 {
             self.consecutive_latch_reads = self.consecutive_latch_reads.saturating_add(1);
         } else {
             self.consecutive_latch_reads = 0;
         }
-        
+
         // Fastモード中に256回を超える連続アクセス → タイミング観測の疑い
         if self.is_fastdisk_effective() && self.consecutive_latch_reads > 256 {
             self.latch_off_reason(FastDisableReason::ExcessiveLatchRead);
         }
     }
-    
+
     /// SafeFast: 現在Fastモードで動作可能か
     #[inline]
     fn is_safe_fast(&self) -> bool {
         self.is_fastdisk_effective() && matches!(self.speed_mode, DiskSpeedMode::Fast)
     }
-
-
 
     /// Phase 4/6: 1 CPU cycle 分だけディスクの bit/nibble timing を進める。
     ///
@@ -1631,6 +1669,7 @@ impl Disk2InterfaceCard {
     pub fn tick_disk_bit(&mut self) {
         if !self.motor_on {
             self.raw_bit_cycle_accumulator = 0;
+            self.woz_bit_cycle_accumulator = 0;
             self.nibble_bit_count = 0;
             self.nibble_shift_register = 0;
             self.nibble_byte_ready = false;
@@ -1638,14 +1677,6 @@ impl Disk2InterfaceCard {
             self.sync_bit_window = 0;
             return;
         }
-
-        self.raw_bit_cycle_accumulator = self.raw_bit_cycle_accumulator.wrapping_add(1);
-        if self.raw_bit_cycle_accumulator < 4 {
-            return;
-        }
-
-        self.raw_bit_cycle_accumulator = 0;
-        self.raw_bit_counter = self.raw_bit_counter.saturating_add(1);
 
         let curr_drive = self.curr_drive;
         if !self.drives[curr_drive].disk.disk_loaded {
@@ -1672,15 +1703,42 @@ impl Disk2InterfaceCard {
         // WOZ ビットストリームがある場合、実機の Disk II LSS と同じアルゴリズムで
         // 1ビットずつシフトレジスタに送り込む。
         if matches!(self.sequencer_mode, DiskSequencerMode::Strict)
-           && self.drives[curr_drive].disk.woz_bitstreams.is_some()
+            && self.drives[curr_drive].disk.woz_bitstreams.is_some()
         {
+            let phase = (self.drives[curr_drive].phase as usize).min(WOZ_HALF_TRACKS - 1);
+            let track_bit_count = self.drives[curr_drive]
+                .disk
+                .woz_bit_counts
+                .as_ref()
+                .and_then(|counts| counts.get(phase).copied())
+                .unwrap_or(0);
+            if track_bit_count == 0 {
+                return;
+            }
+
+            self.woz_bit_cycle_accumulator = self
+                .woz_bit_cycle_accumulator
+                .saturating_add(track_bit_count as u32);
+            if self.woz_bit_cycle_accumulator < WOZ_CPU_CYCLES_PER_REVOLUTION {
+                return;
+            }
+            self.woz_bit_cycle_accumulator -= WOZ_CPU_CYCLES_PER_REVOLUTION;
+            self.raw_bit_counter = self.raw_bit_counter.saturating_add(1);
+
             if !self.write_mode || self.iwm_mode {
                 // ── 読み取りモード: READSHIFT ──
                 // 現在のハーフトラックからビットを1つ読む
-                let phase = (self.drives[curr_drive].phase as usize).min(WOZ_HALF_TRACKS - 1);
                 let bit = {
-                    let bitstreams = self.drives[curr_drive].disk.woz_bitstreams.as_ref().unwrap();
-                    let bit_counts = self.drives[curr_drive].disk.woz_bit_counts.as_ref().unwrap();
+                    let bitstreams = self.drives[curr_drive]
+                        .disk
+                        .woz_bitstreams
+                        .as_ref()
+                        .unwrap();
+                    let bit_counts = self.drives[curr_drive]
+                        .disk
+                        .woz_bit_counts
+                        .as_ref()
+                        .unwrap();
                     let bs = &bitstreams[phase];
                     let bc = bit_counts[phase];
                     if bs.is_empty() || bc == 0 {
@@ -1695,10 +1753,10 @@ impl Disk2InterfaceCard {
                 };
 
                 // OpenEmulator の Disk II LSS アルゴリズム:
-                // dataRegister (= self.latch) をシフトレジスタとして使う。
+                // dataRegister (= self.shift_reg) をシフトレジスタとして使う。
                 // bit7=1: LOAD 状態（自己同期待ち）
                 // bit7=0: SHIFT 状態（ビットをシフトイン中）
-                if self.latch & 0x80 != 0 {
+                if self.shift_reg & 0x80 != 0 {
                     // LOAD 状態: 最初の 1-bit を待つ
                     if !self.drives[curr_drive].woz_sequencer_state {
                         // まだ最初の 1-bit を見ていない
@@ -1708,17 +1766,31 @@ impl Disk2InterfaceCard {
                     } else {
                         // 最初の 1-bit の次のビット → 新バイト開始
                         self.drives[curr_drive].woz_sequencer_state = false;
-                        self.latch = 0x02 | bit;
-                        self.shift_reg = self.latch;
+                        self.shift_reg = 0x02 | bit;
                     }
                 } else {
                     // SHIFT 状態: ビットを左シフトして挿入
-                    self.latch = (self.latch << 1) | bit;
-                    self.shift_reg = self.latch;
+                    self.shift_reg = (self.shift_reg << 1) | bit;
+                    if self.shift_reg & 0x80 != 0 {
+                        self.latch = self.shift_reg;
+                        self.nibble_byte_ready = true;
+                        self.last_read_latch_cycle = self.cumulative_cycles;
+                        self.last_sync_detect_cycle = self.cumulative_cycles;
+                        self.update_sync_window_with_byte(self.latch);
+                        self.check_sync_marker(curr_drive);
+                    }
                 }
             }
             return;
         }
+
+        self.raw_bit_cycle_accumulator = self.raw_bit_cycle_accumulator.wrapping_add(1);
+        if self.raw_bit_cycle_accumulator < 4 {
+            return;
+        }
+
+        self.raw_bit_cycle_accumulator = 0;
+        self.raw_bit_counter = self.raw_bit_counter.saturating_add(1);
 
         // ── 従来の NIB ベースパス (Safe / Transitional / Strict without WOZ bits) ──
         let disk_len = self.drives[curr_drive].disk.data.len();
@@ -1740,7 +1812,10 @@ impl Disk2InterfaceCard {
             let bit = (sample >> (7 - bit_index)) & 1;
             self.update_sync_window_with_bit(bit);
 
-            if matches!(self.sequencer_mode, DiskSequencerMode::Transitional | DiskSequencerMode::Strict) {
+            if matches!(
+                self.sequencer_mode,
+                DiskSequencerMode::Transitional | DiskSequencerMode::Strict
+            ) {
                 self.nibble_shift_register = (self.nibble_shift_register << 1) | bit;
                 self.nibble_bit_count = self.nibble_bit_count.saturating_add(1);
 
@@ -1758,7 +1833,6 @@ impl Disk2InterfaceCard {
                         self.update_sync_window_with_byte(completed_nibble);
                         self.check_sync_marker(curr_drive);
                         self.advance_track_byte_position(curr_drive);
-
 
                         if self.disk_debug_logging {
                             log::debug!(
@@ -1807,7 +1881,8 @@ impl Disk2InterfaceCard {
                 self.shift_reg = source_latch;
 
                 let next_pos = byte_pos + 1;
-                self.drives[curr_drive].disk.byte_position = if next_pos >= nibbles { 0 } else { next_pos };
+                self.drives[curr_drive].disk.byte_position =
+                    if next_pos >= nibbles { 0 } else { next_pos };
                 self.nibble_shift_register = 0;
                 self.pending_write_latch = None;
             }
@@ -1819,10 +1894,10 @@ impl Disk2InterfaceCard {
     pub fn io_read(&mut self, address: u8) -> u8 {
         // motor-off予約のチェック
         self.check_scheduled_motor_off();
-        
+
         // ディスクI/O発生を記録（起動ブースト用）
         self.record_disk_io();
-        
+
         let reg = address & 0x0F;
 
         // $C0xC-$C0xFの場合はシーケンサー機能を更新
@@ -1886,7 +1961,7 @@ impl Disk2InterfaceCard {
                 // bit7: データレディ（ニブルのMSBが立っていればready）
                 // bit6: SENSE（モーター状態など）
                 // Apple IIc ROMはbit6=0を待つループがあるので、常にbit6=0を返す
-                self.latch & 0xBF  // bit6をクリア
+                self.latch & 0xBF // bit6をクリア
             } else {
                 self.latch
             }
@@ -1901,10 +1976,10 @@ impl Disk2InterfaceCard {
     pub fn io_write(&mut self, address: u8, value: u8) {
         // motor-off予約のチェック
         self.check_scheduled_motor_off();
-        
+
         // ディスクI/O発生を記録（起動ブースト用）
         self.record_disk_io();
-        
+
         let reg = address & 0x0F;
 
         // $C0xC-$C0xFの場合はシーケンサー機能を更新
@@ -1937,7 +2012,7 @@ impl Disk2InterfaceCard {
             // モーターON
             // 予約されていたOFFをキャンセル
             self.cancel_motor_off();
-            
+
             if !self.motor_on {
                 self.motor_on = true;
                 log_motor_on();
@@ -1974,7 +2049,7 @@ impl Disk2InterfaceCard {
     fn control_stepper(&mut self, reg: u8) {
         // 借用問題を避けるために先に値をコピー
         let spinning = self.drives[self.curr_drive].spinning;
-        
+
         if !self.motor_on && spinning == 0 {
             return;
         }
@@ -1994,7 +2069,7 @@ impl Disk2InterfaceCard {
         let old_phase = self.drives[self.curr_drive].phase;
         self.control_stepper_move();
         let new_phase = self.drives[self.curr_drive].phase;
-        
+
         // SafeFast: フェーズ変化を追跡
         if old_phase != new_phase {
             self.phase_change_count += 1;
@@ -2029,7 +2104,7 @@ impl Disk2InterfaceCard {
         if new_phase != drive.phase {
             drive.phase = new_phase;
             drive.phase_precise = new_phase as f32;
-            
+
             // STATEログ: トラック変化（整数トラック単位で）
             let new_track = new_phase / 2;
             if new_track != old_track {
@@ -2048,7 +2123,7 @@ impl Disk2InterfaceCard {
             drive.spinning = SPINNING_CYCLES;
         }
     }
-    
+
     /// 同期マーカー検出（FLOWログ用）
     /// D5 AA 96（アドレス）またはD5 AA AD（データ）を検出してログ
     /// セクタ読み完了時にFastDiskログを出力
@@ -2057,7 +2132,7 @@ impl Disk2InterfaceCard {
         self.sync_buf[0] = self.sync_buf[1];
         self.sync_buf[1] = self.sync_buf[2];
         self.sync_buf[2] = self.latch;
-        
+
         // D5 AA 96 (アドレスマーカー) 検出
         if self.sync_buf == [0xD5, 0xAA, 0x96] {
             let track = self.drives[drive].current_track();
@@ -2082,14 +2157,15 @@ impl Disk2InterfaceCard {
                 // セクタ読み完了
                 if let Some(info) = self.current_sector_info {
                     // Fastモード中ならFastDiskログを出す
-                    if self.fast_enabled && matches!(self.rwts_session, RwtsSession::Active { .. }) {
+                    if self.fast_enabled && matches!(self.rwts_session, RwtsSession::Active { .. })
+                    {
                         // 宛先アドレスは不明なので0を使用（将来的にはIOBから取得）
                         log_fastdisk_read(info.track, info.sector, 0x0000);
                     } else {
                         // Accurateモードなら通常のセクタ読みログ
                         log_sector_read(info.track, info.sector);
                     }
-                    
+
                     // RWTSセッション中ならカウントをインクリメント
                     if matches!(self.rwts_session, RwtsSession::Active { .. }) {
                         self.session_sector_count += 1;
@@ -2107,45 +2183,49 @@ impl Disk2InterfaceCard {
             self.sync_logged = false;
         }
     }
-    
+
     /// アドレスフィールドからセクタ情報を抽出
     /// 4-and-4エンコードされたアドレスフィールドを解析
     fn parse_address_field(&mut self, drive: usize) {
         // アドレスフィールドのフォーマット:
         // D5 AA 96 [vol1] [vol2] [trk1] [trk2] [sec1] [sec2] [chk1] [chk2] DE AA EB
         // 各バイトは4-and-4エンコード: val = ((byte1 << 1) | 1) & byte2
-        
+
         let disk = &self.drives[drive].disk;
         let pos = disk.byte_position;
         let track_base = disk.track_base;
         let nibbles = disk.nibbles;
         let data = &disk.data;
-        
+
         // 現在位置から6バイト先（vol, trk, sec）を読む
         // D5 AA 96の直後から
         let read_nibble = |offset: usize| -> u8 {
             let idx = track_base + (pos + offset) % nibbles;
-            if idx < data.len() { data[idx] } else { 0 }
+            if idx < data.len() {
+                data[idx]
+            } else {
+                0
+            }
         };
-        
+
         let vol1 = read_nibble(0);
         let vol2 = read_nibble(1);
         let trk1 = read_nibble(2);
         let trk2 = read_nibble(3);
         let sec1 = read_nibble(4);
         let sec2 = read_nibble(5);
-        
+
         // 4-and-4デコード
         let volume = ((vol1 << 1) | 1) & vol2;
         let track = ((trk1 << 1) | 1) & trk2;
         let sector = ((sec1 << 1) | 1) & sec2;
-        
+
         self.current_sector_info = Some(SectorInfo {
             track,
             sector,
             volume,
         });
-        
+
         // セクタヘッダログ
         log_sector_header(track, sector, volume);
     }
@@ -2187,10 +2267,10 @@ impl Disk2InterfaceCard {
     #[inline(always)]
     fn read_write_nibble(&mut self) {
         let curr_drive = self.curr_drive;
-        
+
         // 先に必要な値を取得
         let disk_loaded = self.drives[curr_drive].disk.disk_loaded;
-        
+
         if !disk_loaded {
             self.latch = 0xFF;
             return;
@@ -2200,10 +2280,10 @@ impl Disk2InterfaceCard {
         // (Apple IIc ROMは$C0EFに書き込んだ後もニブルを読み続ける)
         if !self.write_mode || self.iwm_mode {
             // 読み取りモード（またはIWMモード）
-            
+
             // 連続ラッチアクセス検出（タイミング観測＝コピープロテクト検出）
             self.observe_latch_read();
-            
+
             // 連続読み取りカウント更新
             let current_track = self.drives[curr_drive].current_track();
             if current_track == self.last_track {
@@ -2212,38 +2292,37 @@ impl Disk2InterfaceCard {
                 self.consecutive_reads = 0;
                 self.last_track = current_track;
             }
-            
+
             // SafeFastモード: スピニングチェック省略 + unsafe
             // ラッチOFFの場合は常にAccurate
             let use_fast = self.is_safe_fast();
-            
+
             if use_fast {
                 // 怪しい挙動チェック（Fastモード中のみ）
                 if self.is_safe_fast() {
                     self.detect_suspicious_behavior();
                 }
-                
+
                 // トラックベース更新
                 self.drives[curr_drive].update_track_base_if_needed();
-                
+
                 let byte_pos = self.drives[curr_drive].disk.byte_position;
                 let nibbles = self.drives[curr_drive].disk.nibbles;
                 let track_base = self.drives[curr_drive].disk.track_base;
                 let offset = track_base + byte_pos;
 
                 // unsafeで境界チェック省略
-                self.latch = unsafe {
-                    *self.drives[curr_drive].disk.data.get_unchecked(offset)
-                };
-                
+                self.latch = unsafe { *self.drives[curr_drive].disk.data.get_unchecked(offset) };
+
                 // 1バイトずつ進める（sync marker検出のため）
                 let next_pos = byte_pos + 1;
-                self.drives[curr_drive].disk.byte_position = if next_pos >= nibbles { 0 } else { next_pos };
-                
+                self.drives[curr_drive].disk.byte_position =
+                    if next_pos >= nibbles { 0 } else { next_pos };
+
                 self.shift_reg = self.latch;
                 self.last_read_latch_cycle = self.cumulative_cycles;
                 self.update_sync_window_with_byte(self.latch);
-                
+
                 // Fastモードでも同期マーカー検出（セクタカウント用）
                 self.check_sync_marker(curr_drive);
             } else {
@@ -2257,14 +2336,19 @@ impl Disk2InterfaceCard {
                 }
 
                 let use_strict = matches!(self.sequencer_mode, DiskSequencerMode::Strict);
-                let use_transitional = matches!(self.sequencer_mode, DiskSequencerMode::Transitional);
+                let use_transitional =
+                    matches!(self.sequencer_mode, DiskSequencerMode::Transitional);
 
                 if use_strict {
                     // Strict + WOZ ビットレベルシーケンサ:
                     // tick_disk_bit() でシフトレジスタが常に更新されている。
                     // CPU読み取りは現在の latch 値をそのまま返す（OpenEmulator と同じ）。
                     // latch の bit7 が 0 なら BPL ループで待機、1 なら有効バイト。
-                    self.shift_reg = self.latch;
+                    if self.nibble_byte_ready {
+                        self.nibble_byte_ready = false;
+                    } else {
+                        self.latch &= 0x7F;
+                    }
                     self.last_read_latch_cycle = self.cumulative_cycles;
                 } else {
                     let transitional_latch = if use_transitional && self.nibble_byte_ready {
@@ -2274,7 +2358,8 @@ impl Disk2InterfaceCard {
                         None
                     };
 
-                    self.latch = transitional_latch.unwrap_or_else(|| self.read_current_track_byte(curr_drive));
+                    self.latch = transitional_latch
+                        .unwrap_or_else(|| self.read_current_track_byte(curr_drive));
                     self.advance_track_byte_position(curr_drive);
 
                     self.shift_reg = self.latch;
@@ -2302,12 +2387,12 @@ impl Disk2InterfaceCard {
             // 書き込みモード
             // SafeFast: 書き込みが発生したら即ラッチOFF（コピー保護の温床）
             self.latch_off_on_write();
-            
+
             let write_protected = self.drives[curr_drive].disk.write_protected;
             if write_protected {
                 return;
             }
-            
+
             let spinning = self.drives[curr_drive].spinning;
             if spinning == 0 {
                 return;
@@ -2373,35 +2458,49 @@ impl Disk2InterfaceCard {
                 let dsk_offset = track * BYTES_PER_TRACK + phys_sector * BYTES_PER_SECTOR;
 
                 // アドレスフィールド
-                nib_data[nib_offset] = 0xD5; nib_offset += 1;
-                nib_data[nib_offset] = 0xAA; nib_offset += 1;
-                nib_data[nib_offset] = 0x96; nib_offset += 1;
+                nib_data[nib_offset] = 0xD5;
+                nib_offset += 1;
+                nib_data[nib_offset] = 0xAA;
+                nib_offset += 1;
+                nib_data[nib_offset] = 0x96;
+                nib_offset += 1;
 
                 // ボリューム（4-and-4エンコード）
                 // byte1 = 上位ビット (D7,D5,D3,D1) + 0xAA
                 // byte2 = 下位ビット (D6,D4,D2,D0) + 0xAA
-                nib_data[nib_offset] = (volume >> 1) | 0xAA; nib_offset += 1;
-                nib_data[nib_offset] = volume | 0xAA; nib_offset += 1;
+                nib_data[nib_offset] = (volume >> 1) | 0xAA;
+                nib_offset += 1;
+                nib_data[nib_offset] = volume | 0xAA;
+                nib_offset += 1;
 
                 // トラック（4-and-4エンコード）
                 let t = track as u8;
-                nib_data[nib_offset] = (t >> 1) | 0xAA; nib_offset += 1;
-                nib_data[nib_offset] = t | 0xAA; nib_offset += 1;
+                nib_data[nib_offset] = (t >> 1) | 0xAA;
+                nib_offset += 1;
+                nib_data[nib_offset] = t | 0xAA;
+                nib_offset += 1;
 
                 // セクター（4-and-4エンコード）
                 let s = sector as u8;
-                nib_data[nib_offset] = (s >> 1) | 0xAA; nib_offset += 1;
-                nib_data[nib_offset] = s | 0xAA; nib_offset += 1;
+                nib_data[nib_offset] = (s >> 1) | 0xAA;
+                nib_offset += 1;
+                nib_data[nib_offset] = s | 0xAA;
+                nib_offset += 1;
 
                 // チェックサム（4-and-4エンコード）
                 let checksum = volume ^ t ^ s;
-                nib_data[nib_offset] = (checksum >> 1) | 0xAA; nib_offset += 1;
-                nib_data[nib_offset] = checksum | 0xAA; nib_offset += 1;
+                nib_data[nib_offset] = (checksum >> 1) | 0xAA;
+                nib_offset += 1;
+                nib_data[nib_offset] = checksum | 0xAA;
+                nib_offset += 1;
 
                 // エピローグ
-                nib_data[nib_offset] = 0xDE; nib_offset += 1;
-                nib_data[nib_offset] = 0xAA; nib_offset += 1;
-                nib_data[nib_offset] = 0xEB; nib_offset += 1;
+                nib_data[nib_offset] = 0xDE;
+                nib_offset += 1;
+                nib_data[nib_offset] = 0xAA;
+                nib_offset += 1;
+                nib_data[nib_offset] = 0xEB;
+                nib_offset += 1;
 
                 // GAP2 - 6バイト
                 for _ in 0..6 {
@@ -2410,9 +2509,12 @@ impl Disk2InterfaceCard {
                 }
 
                 // データフィールド
-                nib_data[nib_offset] = 0xD5; nib_offset += 1;
-                nib_data[nib_offset] = 0xAA; nib_offset += 1;
-                nib_data[nib_offset] = 0xAD; nib_offset += 1;
+                nib_data[nib_offset] = 0xD5;
+                nib_offset += 1;
+                nib_data[nib_offset] = 0xAA;
+                nib_offset += 1;
+                nib_data[nib_offset] = 0xAD;
+                nib_offset += 1;
 
                 // 6-and-2エンコードされたデータ（343バイト）
                 let sector_data = &dsk_data[dsk_offset..dsk_offset + BYTES_PER_SECTOR];
@@ -2423,9 +2525,12 @@ impl Disk2InterfaceCard {
                 }
 
                 // エピローグ
-                nib_data[nib_offset] = 0xDE; nib_offset += 1;
-                nib_data[nib_offset] = 0xAA; nib_offset += 1;
-                nib_data[nib_offset] = 0xEB; nib_offset += 1;
+                nib_data[nib_offset] = 0xDE;
+                nib_offset += 1;
+                nib_data[nib_offset] = 0xAA;
+                nib_offset += 1;
+                nib_data[nib_offset] = 0xEB;
+                nib_offset += 1;
 
                 // GAP3 - 27バイト
                 for _ in 0..27 {
@@ -2450,7 +2555,7 @@ impl Disk2InterfaceCard {
         // P5 PROMのデコード: Y=0..255のメインデータと X=85..0の補助データを組み合わせ
         // つまり main[Y] と aux[85-Y] (Y<86の場合) を組み合わせる
         // したがって aux[85-i] に data[i] の下位ビットを格納
-        // 
+        //
         // さらに、P5 PROMは LSR; ROL; LSR; ROL でデコードするので
         // 最初のLSRでaux.bit0が、次のLSRでaux.bit1(元)がキャリーに入る
         // ROLはキャリーをAのbit0に入れるので、
@@ -2461,7 +2566,7 @@ impl Disk2InterfaceCard {
         for i in 0..86 {
             // data[i]の下位2ビットを aux[85-i] に格納
             let aux_idx = 85 - i;
-            let a = ((data[i] & 0x01) << 1) | ((data[i] & 0x02) >> 1);  // (D0 << 1) | D1
+            let a = ((data[i] & 0x01) << 1) | ((data[i] & 0x02) >> 1); // (D0 << 1) | D1
             let b = if i + 86 < 256 {
                 ((data[i + 86] & 0x01) << 3) | ((data[i + 86] & 0x02) << 1)
             } else {
@@ -2513,7 +2618,11 @@ impl Disk2InterfaceCard {
     #[allow(dead_code)]
     pub fn get_drive_status(&self, drive: usize) -> (bool, bool, bool) {
         let d = &self.drives[drive];
-        (d.disk.disk_loaded, self.motor_on && self.curr_drive == drive, d.write_light > 0)
+        (
+            d.disk.disk_loaded,
+            self.motor_on && self.curr_drive == drive,
+            d.write_light > 0,
+        )
     }
 
     /// 現在のトラックを取得
@@ -2527,8 +2636,12 @@ impl Disk2InterfaceCard {
     pub fn get_current_drive(&self) -> usize {
         self.curr_drive
     }
-    
-    fn export_disk_with_order(&self, drive: usize, sector_order: &[usize; 16]) -> Result<Vec<u8>, &'static str> {
+
+    fn export_disk_with_order(
+        &self,
+        drive: usize,
+        sector_order: &[usize; 16],
+    ) -> Result<Vec<u8>, &'static str> {
         if drive > 1 {
             return Err("Invalid drive number");
         }
@@ -2547,7 +2660,8 @@ impl Disk2InterfaceCard {
             for logical_sector in 0..SECTORS_PER_TRACK {
                 let physical_sector = sector_order[logical_sector];
                 if let Some(sector_data) = self.decode_sector(nib_track, physical_sector) {
-                    let dsk_offset = (track * SECTORS_PER_TRACK + logical_sector) * BYTES_PER_SECTOR;
+                    let dsk_offset =
+                        (track * SECTORS_PER_TRACK + logical_sector) * BYTES_PER_SECTOR;
                     dsk_data[dsk_offset..dsk_offset + BYTES_PER_SECTOR]
                         .copy_from_slice(&sector_data);
                 }
@@ -2603,7 +2717,12 @@ impl Disk2InterfaceCard {
 
         let (loaded, modified, write_protected, filename) = {
             let disk = &self.drives[drive].disk;
-            (disk.disk_loaded, disk.modified, disk.write_protected, disk.filename.clone())
+            (
+                disk.disk_loaded,
+                disk.modified,
+                disk.write_protected,
+                disk.filename.clone(),
+            )
         };
 
         if !loaded || !modified {
@@ -2612,8 +2731,11 @@ impl Disk2InterfaceCard {
         if write_protected {
             return Err(format!("Drive {} disk is write-protected", drive + 1));
         }
-        let filename = filename.ok_or_else(|| format!("Drive {} has no backing filename", drive + 1))?;
-        let bytes = self.export_disk_in_original_format(drive).map_err(|e| e.to_string())?;
+        let filename =
+            filename.ok_or_else(|| format!("Drive {} has no backing filename", drive + 1))?;
+        let bytes = self
+            .export_disk_in_original_format(drive)
+            .map_err(|e| e.to_string())?;
         fs::write(&filename, &bytes).map_err(|e| format!("Failed to save {}: {}", filename, e))?;
         self.drives[drive].disk.modified = false;
         if let Some(ref mut dsk) = self.drives[drive].disk.dsk_data {
@@ -2637,7 +2759,52 @@ impl Disk2InterfaceCard {
     pub fn export_disk(&self, drive: usize) -> Result<Vec<u8>, &'static str> {
         self.export_disk_with_order(drive, &DOS_SECTOR_ORDER)
     }
-    
+
+    /// ブート用に、挿入済みディスクからトラック/セクタを1つ読み出す。
+    ///
+    /// DSK/PO は保持しているセクタデータから直接読み、NIB/WOZ は
+    /// 物理トラック上のニブル列をデコードする。主に Disk II Boot ROM が
+    /// ない環境の Virtual Boot ROM 用。
+    pub fn read_sector_for_boot(
+        &self,
+        drive: usize,
+        track: usize,
+        sector: usize,
+    ) -> Option<[u8; BYTES_PER_SECTOR]> {
+        if drive > 1 || track >= TRACKS || sector >= SECTORS_PER_TRACK {
+            return None;
+        }
+
+        let disk = &self.drives[drive].disk;
+        if !disk.disk_loaded {
+            return None;
+        }
+
+        if let Some(ref dsk_data) = disk.dsk_data {
+            let offset = track * BYTES_PER_TRACK + sector * BYTES_PER_SECTOR;
+            if offset + BYTES_PER_SECTOR <= dsk_data.len() {
+                let mut sector_data = [0u8; BYTES_PER_SECTOR];
+                sector_data.copy_from_slice(&dsk_data[offset..offset + BYTES_PER_SECTOR]);
+                return Some(sector_data);
+            }
+        }
+
+        let nib_track = match disk.format {
+            Some(DiskFormat::Nib) => track,
+            Some(DiskFormat::Woz) => track * 2,
+            _ => return None,
+        };
+        let track_offset = nib_track * NIB_TRACK_SIZE;
+        if track_offset + NIB_TRACK_SIZE > disk.data.len() {
+            return None;
+        }
+
+        self.decode_sector(
+            &disk.data[track_offset..track_offset + NIB_TRACK_SIZE],
+            sector,
+        )
+    }
+
     /// NIBトラックからセクターデータをデコード
     #[allow(dead_code)]
     fn decode_sector(&self, nib_track: &[u8], target_sector: usize) -> Option<[u8; 256]> {
@@ -2646,30 +2813,34 @@ impl Disk2InterfaceCard {
         for (i, &code) in WRITE_TABLE.iter().enumerate() {
             decode_table[code as usize] = i as u8;
         }
-        
+
         // セクターマーカーを探す
         let mut pos = 0;
         while pos < nib_track.len() - 20 {
             // アドレスフィールドマーカー (D5 AA 96)
-            if nib_track[pos] == 0xD5 && 
-               pos + 1 < nib_track.len() && nib_track[pos + 1] == 0xAA &&
-               pos + 2 < nib_track.len() && nib_track[pos + 2] == 0x96 {
-                
+            if nib_track[pos] == 0xD5
+                && pos + 1 < nib_track.len()
+                && nib_track[pos + 1] == 0xAA
+                && pos + 2 < nib_track.len()
+                && nib_track[pos + 2] == 0x96
+            {
                 // セクター番号をデコード（4-and-4エンコード）
                 if pos + 7 < nib_track.len() {
                     let sector_odd = nib_track[pos + 5];
                     let sector_even = nib_track[pos + 6];
                     let sector = ((sector_odd & 0x55) << 1) | (sector_even & 0x55);
-                    
+
                     if sector as usize == target_sector {
                         // データフィールドマーカー (D5 AA AD) を探す
                         let mut data_pos = pos + 10;
                         while data_pos < nib_track.len() - 350 {
-                            if nib_track[data_pos] == 0xD5 &&
-                               nib_track[data_pos + 1] == 0xAA &&
-                               nib_track[data_pos + 2] == 0xAD {
+                            if nib_track[data_pos] == 0xD5
+                                && nib_track[data_pos + 1] == 0xAA
+                                && nib_track[data_pos + 2] == 0xAD
+                            {
                                 // データをデコード
-                                return self.decode_6and2(&nib_track[data_pos + 3..], &decode_table);
+                                return self
+                                    .decode_6and2(&nib_track[data_pos + 3..], &decode_table);
                             }
                             data_pos += 1;
                         }
@@ -2680,18 +2851,19 @@ impl Disk2InterfaceCard {
         }
         None
     }
-    
+
     /// 6-and-2エンコードされたデータをデコード
     #[allow(dead_code)]
     fn decode_6and2(&self, encoded: &[u8], decode_table: &[u8; 256]) -> Option<[u8; 256]> {
         if encoded.len() < 343 {
             return None;
         }
-        
+
         let mut aux = [0u8; 86];
         let mut data = [0u8; 256];
-        
+
         // 補助バイト（86バイト）をデコード
+        // ディスク上では aux[85] から aux[0] の順に格納されている。
         let mut prev = 0u8;
         for i in 0..86 {
             let code = encoded[i];
@@ -2699,10 +2871,11 @@ impl Disk2InterfaceCard {
                 return None;
             }
             let val = decode_table[code as usize];
-            aux[i] = val ^ prev;
-            prev = aux[i];
+            let decoded = val ^ prev;
+            aux[85 - i] = decoded;
+            prev = decoded;
         }
-        
+
         // メインデータ（256バイト）をデコード
         for i in 0..256 {
             let code = encoded[86 + i];
@@ -2713,15 +2886,16 @@ impl Disk2InterfaceCard {
             data[i] = val ^ prev;
             prev = data[i];
         }
-        
+
         // 補助ビットを結合して完全な8ビットデータを復元
         for i in 0..256 {
-            let aux_idx = i % 86;
+            let aux_idx = 85 - (i % 86);
             let bit_pos = i / 86;
             let aux_bits = (aux[aux_idx] >> (bit_pos * 2)) & 0x03;
-            data[i] = (data[i] << 2) | aux_bits;
+            let low_bits = ((aux_bits & 0x02) >> 1) | ((aux_bits & 0x01) << 1);
+            data[i] = (data[i] << 2) | low_bits;
         }
-        
+
         Some(data)
     }
 }

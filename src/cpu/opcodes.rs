@@ -1,8 +1,8 @@
 //! オペコードの実装
-//! 
+//!
 //! 6502/65C02の全オペコードを実装
 
-use super::{Cpu, MemoryBus, flags, CpuType};
+use super::{flags, Cpu, CpuType, MemoryBus};
 
 impl Cpu {
     //--------------------------------------------------
@@ -262,6 +262,126 @@ impl Cpu {
     }
 
     //--------------------------------------------------
+    // NMOS 6502 unofficial store/no-op instructions
+    //--------------------------------------------------
+    pub(super) fn sax_zeropage<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_zeropage_addr(memory);
+        memory.write(addr, self.regs.a & self.regs.x);
+        self.cycles += 1;
+    }
+
+    pub(super) fn sax_zeropage_y<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_zeropage_y_addr(memory);
+        memory.write(addr, self.regs.a & self.regs.x);
+        self.cycles += 1;
+    }
+
+    pub(super) fn sax_absolute<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_absolute_addr(memory);
+        memory.write(addr, self.regs.a & self.regs.x);
+        self.cycles += 1;
+    }
+
+    pub(super) fn sax_indirect_x<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_indirect_x_addr(memory);
+        memory.write(addr, self.regs.a & self.regs.x);
+        self.cycles += 1;
+    }
+
+    fn do_slo<M: MemoryBus>(&mut self, memory: &mut M, addr: u16, extra_cycles: u32) {
+        let mut value = memory.read(addr);
+        self.regs.set_flag(flags::CARRY, (value & 0x80) != 0);
+        value <<= 1;
+        memory.write(addr, value);
+        self.regs.a |= value;
+        self.regs.update_zero_negative_flags(self.regs.a);
+        self.cycles += extra_cycles;
+    }
+
+    pub(super) fn slo_zeropage<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_zeropage_addr(memory);
+        self.do_slo(memory, addr, 3);
+    }
+
+    pub(super) fn slo_zeropage_x<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_zeropage_x_addr(memory);
+        self.do_slo(memory, addr, 3);
+    }
+
+    pub(super) fn slo_absolute<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_absolute_addr(memory);
+        self.do_slo(memory, addr, 3);
+    }
+
+    pub(super) fn slo_absolute_x<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_absolute_x_addr(memory, true);
+        self.do_slo(memory, addr, 3);
+    }
+
+    pub(super) fn slo_absolute_y<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_absolute_y_addr(memory, true);
+        self.do_slo(memory, addr, 3);
+    }
+
+    pub(super) fn slo_indirect_x<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_indirect_x_addr(memory);
+        self.do_slo(memory, addr, 3);
+    }
+
+    pub(super) fn slo_indirect_y<M: MemoryBus>(&mut self, memory: &mut M) {
+        let addr = self.get_indirect_y_addr(memory, true);
+        self.do_slo(memory, addr, 3);
+    }
+
+    pub(super) fn ahx_absolute_y<M: MemoryBus>(&mut self, memory: &mut M) {
+        let low = memory.read(self.regs.pc) as u16;
+        self.regs.pc = self.regs.pc.wrapping_add(1);
+        let high = memory.read(self.regs.pc) as u16;
+        self.regs.pc = self.regs.pc.wrapping_add(1);
+        let base = (high << 8) | low;
+        let addr = base.wrapping_add(self.regs.y as u16);
+        let value = self.regs.a & self.regs.x & ((high as u8).wrapping_add(1));
+        memory.write(addr, value);
+        self.cycles += 4;
+    }
+
+    pub(super) fn ahx_indirect_y<M: MemoryBus>(&mut self, memory: &mut M) {
+        let ptr = memory.read(self.regs.pc);
+        self.regs.pc = self.regs.pc.wrapping_add(1);
+        let low = memory.read(ptr as u16) as u16;
+        let high = memory.read(ptr.wrapping_add(1) as u16) as u16;
+        let base = (high << 8) | low;
+        let addr = base.wrapping_add(self.regs.y as u16);
+        let value = self.regs.a & self.regs.x & ((high as u8).wrapping_add(1));
+        memory.write(addr, value);
+        self.cycles += 5;
+    }
+
+    pub(super) fn unofficial_nop_immediate<M: MemoryBus>(&mut self, memory: &mut M) {
+        let _ = self.get_immediate(memory);
+    }
+
+    pub(super) fn unofficial_nop_zeropage<M: MemoryBus>(&mut self, memory: &mut M) {
+        let _ = self.get_zeropage_addr(memory);
+        self.cycles += 1;
+    }
+
+    pub(super) fn unofficial_nop_zeropage_x<M: MemoryBus>(&mut self, memory: &mut M) {
+        let _ = self.get_zeropage_x_addr(memory);
+        self.cycles += 1;
+    }
+
+    pub(super) fn unofficial_nop_absolute<M: MemoryBus>(&mut self, memory: &mut M) {
+        let _ = self.get_absolute_addr(memory);
+        self.cycles += 1;
+    }
+
+    pub(super) fn unofficial_nop_absolute_x<M: MemoryBus>(&mut self, memory: &mut M) {
+        let _ = self.get_absolute_x_addr(memory, false);
+        self.cycles += 1;
+    }
+
+    //--------------------------------------------------
     // Transfer Instructions
     //--------------------------------------------------
     pub(super) fn tax(&mut self) {
@@ -352,18 +472,22 @@ impl Cpu {
     // ADC - Add with Carry
     //--------------------------------------------------
     fn do_adc(&mut self, value: u8) {
-        let carry = if self.regs.get_flag(flags::CARRY) { 1u16 } else { 0u16 };
-        
+        let carry = if self.regs.get_flag(flags::CARRY) {
+            1u16
+        } else {
+            0u16
+        };
+
         if self.regs.get_flag(flags::DECIMAL) {
             // BCDモード
             let mut low = (self.regs.a & 0x0F) as u16 + (value & 0x0F) as u16 + carry;
             let mut high = (self.regs.a >> 4) as u16 + (value >> 4) as u16;
-            
+
             if low > 9 {
                 low -= 10;
                 high += 1;
             }
-            
+
             let result = if high > 9 {
                 self.regs.set_flag(flags::CARRY, true);
                 (((high - 10) << 4) | (low & 0x0F)) as u8
@@ -371,7 +495,7 @@ impl Cpu {
                 self.regs.set_flag(flags::CARRY, false);
                 ((high << 4) | (low & 0x0F)) as u8
             };
-            
+
             if self.cpu_type == CpuType::Cpu65C02 {
                 self.regs.update_zero_negative_flags(result);
             }
@@ -379,11 +503,11 @@ impl Cpu {
         } else {
             let result = self.regs.a as u16 + value as u16 + carry;
             let result8 = result as u8;
-            
+
             self.regs.set_flag(flags::CARRY, result > 0xFF);
             self.regs.set_flag(
                 flags::OVERFLOW,
-                ((self.regs.a ^ result8) & (value ^ result8) & 0x80) != 0
+                ((self.regs.a ^ result8) & (value ^ result8) & 0x80) != 0,
             );
             self.regs.update_zero_negative_flags(result8);
             self.regs.a = result8;
@@ -457,15 +581,19 @@ impl Cpu {
     fn do_sbc(&mut self, value: u8) {
         // SBCはADCの補数として実装
         if self.regs.get_flag(flags::DECIMAL) {
-            let carry = if self.regs.get_flag(flags::CARRY) { 0i16 } else { 1i16 };
+            let carry = if self.regs.get_flag(flags::CARRY) {
+                0i16
+            } else {
+                1i16
+            };
             let mut low = (self.regs.a & 0x0F) as i16 - (value & 0x0F) as i16 - carry;
             let mut high = (self.regs.a >> 4) as i16 - (value >> 4) as i16;
-            
+
             if low < 0 {
                 low += 10;
                 high -= 1;
             }
-            
+
             let result = if high < 0 {
                 self.regs.set_flag(flags::CARRY, false);
                 (((high + 10) << 4) | (low & 0x0F)) as u8
@@ -473,7 +601,7 @@ impl Cpu {
                 self.regs.set_flag(flags::CARRY, true);
                 ((high << 4) | (low & 0x0F)) as u8
             };
-            
+
             if self.cpu_type == CpuType::Cpu65C02 {
                 self.regs.update_zero_negative_flags(result);
             }

@@ -1,8 +1,8 @@
 //! セーブステート機能
-//! 
+//!
 //! エミュレータの状態を保存・復元する
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// CPUレジスタの状態（セーブ用）
 #[derive(Serialize, Deserialize, Clone)]
@@ -21,17 +21,21 @@ pub struct CpuState {
 /// メモリの状態（セーブ用）
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MemoryState {
-    pub ram: Vec<u8>,           // メインRAM (64KB)
-    pub bank1: Vec<u8>,         // ランゲージカード Bank1 (4KB)
-    pub bank2: Vec<u8>,         // ランゲージカード Bank2 (4KB)
-    pub lc_ram: Vec<u8>,        // ランゲージカード RAM (8KB)
-    
+    pub ram: Vec<u8>,    // メインRAM (64KB)
+    pub bank1: Vec<u8>,  // ランゲージカード Bank1 (4KB)
+    pub bank2: Vec<u8>,  // ランゲージカード Bank2 (4KB)
+    pub lc_ram: Vec<u8>, // ランゲージカード RAM (8KB)
+    #[serde(default)]
+    pub aux_bank2: Vec<u8>, // Aux ランゲージカード Bank2 (4KB)
+    #[serde(default)]
+    pub aux_lc_ram: Vec<u8>, // Aux ランゲージカード RAM (16KB)
+
     // ソフトスイッチ
     pub lc_read_enable: bool,
     pub lc_write_enable: bool,
     pub lc_bank2: bool,
     pub lc_prewrite: bool,
-    
+
     // ビデオモード
     pub text_mode: bool,
     pub mixed_mode: bool,
@@ -39,7 +43,7 @@ pub struct MemoryState {
     pub hires_mode: bool,
     pub col80: bool,
     pub altchar: bool,
-    
+
     // キーボード
     pub keyboard_latch: u8,
 }
@@ -49,7 +53,7 @@ pub struct MemoryState {
 pub struct DiskDriveState {
     pub disk_loaded: bool,
     pub write_protected: bool,
-    pub data: Vec<u8>,          // ディスクデータ
+    pub data: Vec<u8>, // ディスクデータ
     pub dsk_data: Option<Vec<u8>>,
     pub format: Option<String>,
     pub filename: Option<String>,
@@ -58,7 +62,7 @@ pub struct DiskDriveState {
     pub byte_position: usize,
     pub nibbles: usize,
     pub track_base: usize,
-    pub phase: i32,             // 現在のフェーズ
+    pub phase: i32, // 現在のフェーズ
     pub phase_precise: f32,
     pub spinning: u32,
     pub write_light: u32,
@@ -80,6 +84,8 @@ pub struct DiskState {
     pub last_read_latch_cycle: u64,
     pub cumulative_cycles: u64,
     pub raw_bit_cycle_accumulator: u8,
+    #[serde(default)]
+    pub woz_bit_cycle_accumulator: u32,
     pub raw_bit_counter: u64,
     pub nibble_bit_count: u8,
     pub nibble_shift_register: u8,
@@ -109,7 +115,7 @@ pub struct VideoState {
 /// 完全なエミュレータ状態
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SaveState {
-    pub version: u32,           // セーブフォーマットのバージョン
+    pub version: u32, // セーブフォーマットのバージョン
     pub cpu: CpuState,
     pub memory: MemoryState,
     pub disk: DiskState,

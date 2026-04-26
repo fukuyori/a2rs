@@ -1,22 +1,22 @@
 //! MOS 6502/65C02 CPU Emulator
-//! 
+//!
 //! Apple IIで使用される6502プロセッサのエミュレーション実装
 //! Based on 6502 technical specifications and datasheet
 
+pub mod addressing;
 mod opcodes;
 mod opcodes2;
-pub mod addressing;
 
 /// CPUのステータスレジスタのフラグビット
 pub mod flags {
-    pub const CARRY: u8 = 0b0000_0001;      // C: キャリーフラグ
-    pub const ZERO: u8 = 0b0000_0010;       // Z: ゼロフラグ
+    pub const CARRY: u8 = 0b0000_0001; // C: キャリーフラグ
+    pub const ZERO: u8 = 0b0000_0010; // Z: ゼロフラグ
     pub const IRQ_DISABLE: u8 = 0b0000_0100; // I: 割り込み禁止フラグ
-    pub const DECIMAL: u8 = 0b0000_1000;    // D: BCDモードフラグ
-    pub const BREAK: u8 = 0b0001_0000;      // B: ブレークフラグ
-    pub const UNUSED: u8 = 0b0010_0000;     // 未使用（常に1）
-    pub const OVERFLOW: u8 = 0b0100_0000;   // V: オーバーフローフラグ
-    pub const NEGATIVE: u8 = 0b1000_0000;   // N: 負数フラグ
+    pub const DECIMAL: u8 = 0b0000_1000; // D: BCDモードフラグ
+    pub const BREAK: u8 = 0b0001_0000; // B: ブレークフラグ
+    pub const UNUSED: u8 = 0b0010_0000; // 未使用（常に1）
+    pub const OVERFLOW: u8 = 0b0100_0000; // V: オーバーフローフラグ
+    pub const NEGATIVE: u8 = 0b1000_0000; // N: 負数フラグ
 }
 
 /// CPUの種類
@@ -51,7 +51,7 @@ impl Default for Registers {
             a: 0,
             x: 0,
             y: 0,
-            sp: 0xFD,  // スタックは$01FDから開始
+            sp: 0xFD, // スタックは$01FDから開始
             pc: 0,
             status: flags::UNUSED | flags::IRQ_DISABLE,
         }
@@ -88,7 +88,6 @@ pub trait MemoryBus {
     /// メモリに1バイト書き込み
     fn write(&mut self, address: u16, value: u8);
 }
-
 
 /// Phase 4 用のCPUマイクロサイクル状態。
 ///
@@ -355,18 +354,18 @@ impl Cpu {
             0x8C => self.sty_absolute(memory),
 
             // Transfer Instructions
-            0xAA => self.tax(),    // TAX
-            0x8A => self.txa(),    // TXA
-            0xA8 => self.tay(),    // TAY
-            0x98 => self.tya(),    // TYA
-            0xBA => self.tsx(),    // TSX
-            0x9A => self.txs(),    // TXS
+            0xAA => self.tax(), // TAX
+            0x8A => self.txa(), // TXA
+            0xA8 => self.tay(), // TAY
+            0x98 => self.tya(), // TYA
+            0xBA => self.tsx(), // TSX
+            0x9A => self.txs(), // TXS
 
             // Stack Instructions
-            0x48 => self.pha(memory),  // PHA
-            0x68 => self.pla(memory),  // PLA
-            0x08 => self.php(memory),  // PHP
-            0x28 => self.plp(memory),  // PLP
+            0x48 => self.pha(memory), // PHA
+            0x68 => self.pla(memory), // PLA
+            0x08 => self.php(memory), // PHP
+            0x28 => self.plp(memory), // PLP
 
             // Arithmetic - ADC
             0x69 => self.adc_immediate(memory),
@@ -513,6 +512,34 @@ impl Cpu {
             // NOP
             0xEA => self.nop(),
 
+            // NMOS 6502 unofficial opcodes used by some copy-protected loaders.
+            0x80 | 0x82 | 0x89 | 0xC2 | 0xE2 if self.cpu_type == CpuType::Cpu6502 => {
+                self.unofficial_nop_immediate(memory)
+            }
+            0x04 | 0x44 | 0x64 if self.cpu_type == CpuType::Cpu6502 => {
+                self.unofficial_nop_zeropage(memory)
+            }
+            0x14 | 0x34 | 0x54 | 0x74 | 0xD4 | 0xF4 if self.cpu_type == CpuType::Cpu6502 => {
+                self.unofficial_nop_zeropage_x(memory)
+            }
+            0x0C if self.cpu_type == CpuType::Cpu6502 => self.unofficial_nop_absolute(memory),
+            0x1C | 0x3C | 0x5C | 0x7C | 0xDC | 0xFC if self.cpu_type == CpuType::Cpu6502 => {
+                self.unofficial_nop_absolute_x(memory)
+            }
+            0x87 if self.cpu_type == CpuType::Cpu6502 => self.sax_zeropage(memory),
+            0x97 if self.cpu_type == CpuType::Cpu6502 => self.sax_zeropage_y(memory),
+            0x83 if self.cpu_type == CpuType::Cpu6502 => self.sax_indirect_x(memory),
+            0x8F if self.cpu_type == CpuType::Cpu6502 => self.sax_absolute(memory),
+            0x03 if self.cpu_type == CpuType::Cpu6502 => self.slo_indirect_x(memory),
+            0x07 if self.cpu_type == CpuType::Cpu6502 => self.slo_zeropage(memory),
+            0x0F if self.cpu_type == CpuType::Cpu6502 => self.slo_absolute(memory),
+            0x13 if self.cpu_type == CpuType::Cpu6502 => self.slo_indirect_y(memory),
+            0x17 if self.cpu_type == CpuType::Cpu6502 => self.slo_zeropage_x(memory),
+            0x1B if self.cpu_type == CpuType::Cpu6502 => self.slo_absolute_y(memory),
+            0x1F if self.cpu_type == CpuType::Cpu6502 => self.slo_absolute_x(memory),
+            0x93 if self.cpu_type == CpuType::Cpu6502 => self.ahx_indirect_y(memory),
+            0x9F if self.cpu_type == CpuType::Cpu6502 => self.ahx_absolute_y(memory),
+
             // 65C02 Extensions
             0x1A if self.cpu_type == CpuType::Cpu65C02 => self.ina(), // INC A
             0x3A if self.cpu_type == CpuType::Cpu65C02 => self.dea(), // DEC A
@@ -583,22 +610,21 @@ impl Cpu {
             0xFF if self.cpu_type == CpuType::Cpu65C02 => self.bbs(memory, 7),
 
             // 65C02 Multi-byte NOPs (2-byte: skip 1 operand)
-            0x02 | 0x22 | 0x42 | 0x62 | 0x82 | 0xC2 | 0xE2 
-                if self.cpu_type == CpuType::Cpu65C02 => {
+            0x02 | 0x22 | 0x42 | 0x62 | 0x82 | 0xC2 | 0xE2
+                if self.cpu_type == CpuType::Cpu65C02 =>
+            {
                 let _ = self.fetch_byte(memory); // 1バイトオペランドを読み飛ばす
                 self.cycles += 1;
             }
-            
+
             // 65C02 Multi-byte NOPs (2-byte: zero page style)
-            0x44 | 0x54 | 0xD4 | 0xF4
-                if self.cpu_type == CpuType::Cpu65C02 => {
+            0x44 | 0x54 | 0xD4 | 0xF4 if self.cpu_type == CpuType::Cpu65C02 => {
                 let _ = self.fetch_byte(memory); // ゼロページアドレスを読み飛ばす
                 self.cycles += 2;
             }
-            
+
             // 65C02 Multi-byte NOPs (3-byte: absolute style)
-            0x5C | 0xDC | 0xFC
-                if self.cpu_type == CpuType::Cpu65C02 => {
+            0x5C | 0xDC | 0xFC if self.cpu_type == CpuType::Cpu65C02 => {
                 let _ = self.fetch_byte(memory); // 絶対アドレス（2バイト）を読み飛ばす
                 let _ = self.fetch_byte(memory);
                 self.cycles += 4;
@@ -617,7 +643,6 @@ impl Cpu {
         }
     }
 }
-
 
 impl Cpu {
     /// 現在マイクロサイクル実行中かどうか。

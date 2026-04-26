@@ -20,7 +20,17 @@ fn file_name_lower(path: &Path) -> Option<String> {
 }
 
 fn list_rom_candidates(rom_dir: &Path) -> Vec<(String, PathBuf)> {
-    let mut files: Vec<(String, PathBuf)> = fs::read_dir(rom_dir)
+    let mut files = Vec::new();
+    for dir in rom_search_dirs(rom_dir) {
+        files.extend(list_rom_candidates_in_dir(&dir));
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files.dedup_by(|a, b| a.1 == b.1);
+    files
+}
+
+fn list_rom_candidates_in_dir(rom_dir: &Path) -> Vec<(String, PathBuf)> {
+    fs::read_dir(rom_dir)
         .ok()
         .into_iter()
         .flatten()
@@ -34,9 +44,30 @@ fn list_rom_candidates(rom_dir: &Path) -> Vec<(String, PathBuf)> {
                 None
             }
         })
-        .collect();
-    files.sort_by(|a, b| a.0.cmp(&b.0));
-    files
+        .collect()
+}
+
+fn rom_search_dirs(rom_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    push_unique_dir(&mut dirs, rom_dir.to_path_buf());
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        push_unique_dir(&mut dirs, current_dir.join("roms"));
+    }
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            push_unique_dir(&mut dirs, exe_dir.join("roms"));
+        }
+    }
+
+    dirs
+}
+
+fn push_unique_dir(dirs: &mut Vec<PathBuf>, path: PathBuf) {
+    if !dirs.iter().any(|existing| existing == &path) {
+        dirs.push(path);
+    }
 }
 
 fn select_by_priority(candidates: &[(String, PathBuf)], exact: &[&str]) -> Option<PathBuf> {
@@ -54,11 +85,15 @@ pub fn find_rom_candidates(rom_dir: &Path, kind: RomKind) -> RomSearchResult {
     let filtered: Vec<(String, PathBuf)> = match kind {
         RomKind::Main => files
             .into_iter()
-            .filter(|(name, _)| name.starts_with("apple") && (name.ends_with(".rom") || name.ends_with(".bin")))
+            .filter(|(name, _)| {
+                name.starts_with("apple") && (name.ends_with(".rom") || name.ends_with(".bin"))
+            })
             .collect(),
         RomKind::Disk => files
             .into_iter()
-            .filter(|(name, _)| name.contains("disk") && (name.ends_with(".rom") || name.ends_with(".bin")))
+            .filter(|(name, _)| {
+                name.contains("disk") && (name.ends_with(".rom") || name.ends_with(".bin"))
+            })
             .collect(),
     };
 
@@ -74,6 +109,8 @@ pub fn find_rom_candidates(rom_dir: &Path, kind: RomKind) -> RomSearchResult {
         RomKind::Disk => &[
             "disk2.rom",
             "disk2.bin",
+            "disk-ii.rom",
+            "disk-ii.bin",
             "diskii.rom",
             "diskii.bin",
         ][..],
@@ -81,7 +118,10 @@ pub fn find_rom_candidates(rom_dir: &Path, kind: RomKind) -> RomSearchResult {
 
     let selected = select_by_priority(&filtered, exact);
     let candidates = filtered.into_iter().map(|(_, path)| path).collect();
-    RomSearchResult { selected, candidates }
+    RomSearchResult {
+        selected,
+        candidates,
+    }
 }
 
 fn is_bare_filename(input: &str) -> bool {
@@ -99,8 +139,14 @@ pub fn resolve_rom_arg(input: &str, rom_dir: &Path) -> Result<PathBuf, Vec<PathB
     if is_bare_filename(input) {
         if let Ok(current_dir) = std::env::current_dir() {
             tried.push(current_dir.join(input));
+            tried.push(current_dir.join("roms").join(input));
         }
         tried.push(rom_dir.join(input));
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                tried.push(exe_dir.join("roms").join(input));
+            }
+        }
     } else {
         tried.push(input_path.to_path_buf());
     }

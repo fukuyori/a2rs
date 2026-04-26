@@ -63,6 +63,8 @@ desktop.ini
 /a2rs_home/
 
 # User-specific ROM / disk images
+/roms/
+/disks/
 *.dsk
 *.do
 *.po
